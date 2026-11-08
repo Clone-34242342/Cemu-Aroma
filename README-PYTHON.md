@@ -72,6 +72,10 @@ only thread suspensions owned by the debugger.
 
 Stepping uses Cemu's software breakpoint mechanism. Self-branching instructions
 and concurrent multicore execution need care; this is not cycle-accurate stepping.
+Register writes edit raw CPU state; the client does not provide a guest-function-call API.
+Redirecting PC from a menu or an OS/HLE wait did not produce a reliable isolated
+function call and caused a crash in a research probe. Execute temporary code only
+from a verified guest-code stop with a controlled thread and restore context.
 MSR is unavailable. Hardware memory watchpoints are inherited from upstream,
 limited to one aligned four-byte range on x86, and depend on host ptrace support.
 Use `--force-interpreter` when you need more accurate memory-watchpoint locations;
