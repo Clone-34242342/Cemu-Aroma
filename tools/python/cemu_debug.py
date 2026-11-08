@@ -76,6 +76,7 @@ class CemuDebug:
             raise DebugError("Already connected")
         self.socket = socket.create_connection(("127.0.0.1", self.port), self.timeout)
         self.socket.settimeout(self.timeout)
+        self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         try:
             features = self._request("qSupported:multiprocess-")
             if "cemu-python-debug+" not in features:
