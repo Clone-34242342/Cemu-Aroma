@@ -16,6 +16,10 @@
 #include <netinet/tcp.h>
 #endif
 
+#if BOOST_OS_LINUX
+#include <sys/prctl.h>
+#endif
+
 #define GET_THREAD_ID(threadPtr) memory_getVirtualOffsetFromPointer(threadPtr)
 #define GET_THREAD_BY_ID(threadId) (OSThread_t*)memory_getPointerFromPhysicalOffset(threadId)
 
@@ -324,6 +328,16 @@ bool GDBServer::Initialize()
 		m_server_socket = INVALID_SOCKET;
 		return false;
 	}
+
+#if BOOST_OS_LINUX
+	// Scheduler workers can start before the debugger is enabled. Apply the
+	// same inspection permission here instead of depending on their startup.
+	if (prctl(PR_SET_DUMPABLE, 1ul, 0ul, 0ul, 0ul) != 0 ||
+		prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0ul, 0ul, 0ul) != 0)
+	{
+		cemuLog_log(LogType::Force, "[GDBStub] Could not enable local process inspection");
+	}
+#endif
 
 	m_thread = std::thread(std::bind(&GDBServer::ThreadFunc, this));
 
