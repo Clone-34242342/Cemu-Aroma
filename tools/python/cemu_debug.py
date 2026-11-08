@@ -75,10 +75,12 @@ class CemuDebug:
         self._last_frame = b""
         self.running = False
         self.stop: str | None = None
+        self._selected_thread: int | None = None
 
     def connect(self):
         if self.socket is not None:
             raise DebugError("Already connected")
+        self._selected_thread = None
         self.socket = socket.create_connection(("127.0.0.1", self.port), self.timeout)
         self.socket.settimeout(self.timeout)
         self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -233,6 +235,7 @@ class CemuDebug:
             self.socket.close()
             self.socket = None
             self._buffer.clear()
+            self._selected_thread = None
 
     def threads(self) -> list[dict]:
         self._paused()
@@ -263,6 +266,28 @@ class CemuDebug:
         if thread_id <= 0:
             raise ValueError("Choose a concrete thread ID from threads()")
         self._request(f"Hg{thread_id:x}", ok=True)
+        self._selected_thread = thread_id
+
+    def paired_register(self, index: int, value: int | None = None) -> int | None:
+        """Read/write raw PS1 lane bits in the paused selected thread's OSContext.
+
+        Standard GDB FPR packets expose PS0 only. Cemu's checked OSContext ABI
+        stores the second 64-bit lane at +0x1e0; context loading restores both.
+        """
+        self._paused()
+        if not isinstance(index, int) or not 0 <= index < 32:
+            raise ValueError("Paired-register index must be in 0..31")
+        if value is not None and (not isinstance(value, int) or not 0 <= value < (1 << 64)):
+            raise ValueError("Paired-register value must be raw unsigned 64-bit bits")
+        if self._selected_thread is None:
+            raise DebugError("Select a concrete thread before accessing paired registers")
+        thread = self._selected_thread
+        if self.read(thread, 8) != b"OSContxt":
+            raise DebugError("Selected thread has an unsupported OSContext layout")
+        address = thread + 0x1e0 + index * 8
+        if value is None:
+            return int.from_bytes(self.read(address, 8), "big")
+        self.write(address, value.to_bytes(8, "big"))
 
     def registers(self) -> dict[str, int | None]:
         self._paused()
@@ -359,7 +384,7 @@ def dispatch(client: CemuDebug, request: dict):
     if op == "write":
         return client.write(args["address"], bytes.fromhex(args["hex"]))
     if op not in {"pause", "resume", "wait_stop", "step", "threads", "modules",
-                  "select_thread", "registers", "register", "u32", "f32", "breakpoint"}:
+                  "select_thread", "registers", "register", "paired_register", "u32", "f32", "breakpoint"}:
         raise ValueError(f"Unknown operation: {op}")
     return getattr(client, op)(**args)
 

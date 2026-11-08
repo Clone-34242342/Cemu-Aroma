@@ -144,6 +144,29 @@ class ClientTests(unittest.TestCase):
             self.assertEqual(client.register("pc"), 0x02000000)
             client.breakpoint(0x2000000, remove=True)
 
+    def test_paired_lane_bits_and_selected_thread(self):
+        commands = [("m1000,8", "4f53436f6e747874"), ("m1238,8", "7ff8000000001234"),
+                    ("m1000,8", "4f53436f6e747874"), ("M1238,8:fff0000000000000", "OK"),
+                    ("Hg2000", "OK"), ("m2000,8", "4f53436f6e747874"),
+                    ("m22d8,8", "3ff8000000000000")]
+        with session(commands) as client:
+            self.assertEqual(dispatch(client, {"op": "paired_register", "args": {"index": 11}}),
+                             0x7ff8000000001234)
+            client.paired_register(11, 0xfff0000000000000)
+            client.select_thread(0x2000)
+            self.assertEqual(client.paired_register(31), 0x3ff8000000000000)
+
+    def test_paired_lane_rejects_invalid_context_and_arguments(self):
+        with session([("m1000,8", "0000000000000000")]) as client:
+            for index in [-1, 32]:
+                with self.assertRaises(ValueError):
+                    client.paired_register(index)
+            for value in [-1, 1 << 64]:
+                with self.assertRaises(ValueError):
+                    client.paired_register(0, value)
+            with self.assertRaises(DebugError):
+                client.paired_register(0)
+
     def test_checksum_retransmit(self):
         def damaged(connection):
             connection.sendall(b"+$01020304#00")

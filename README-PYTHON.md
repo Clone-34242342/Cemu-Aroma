@@ -30,11 +30,16 @@ with CemuDebug() as debug:
     # debug.u32(address, value)       # big-endian integer write
     # debug.f32(address, value)       # big-endian float write
     # debug.register("r3", value)
+    # debug.paired_register(11)       # raw PS1 lane bits for f11
     # debug.breakpoint(address)
     # debug.resume(); debug.wait_stop()
     # debug.step()
 # Detaches, removes breakpoints, and resumes the title.
 ```
+
+`register("f11")` accesses the PS0 lane. `paired_register(11)` reads or writes
+the raw 64-bit PS1 lane of the selected paused thread, after checking its
+OSContext signature. Both lanes are needed when preserving paired-single state.
 
 For reversible code experiments, `debug.patch(address, replacement_bytes,
 expected=original_bytes)` is a context manager. It checks the original bytes,
