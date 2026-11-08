@@ -414,7 +414,11 @@ void cemu_initForGame()
     if (g_gdbstub)
     {
         g_gdbstub->HandleEntryStop(_entryPoint);
-        g_gdbstub->Initialize();
+        if (!g_gdbstub->Initialize())
+        {
+            cemuLog_log(LogType::Force, "[GDBStub] Could not start debugger listener; continuing without the entry breakpoint");
+            g_gdbstub.reset();
+        }
     }
 	debugger_handleEntryBreakpoint(_entryPoint);
 	// load graphic packs

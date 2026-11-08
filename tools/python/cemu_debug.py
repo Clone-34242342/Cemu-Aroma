@@ -296,8 +296,9 @@ class CemuDebug:
 
     def breakpoint(self, address: int, *, remove: bool = False, kind: int = 0, size: int = 4):
         self._paused()
-        if kind not in range(5) or (kind <= 1 and (address % 4 or size != 4)):
-            raise ValueError("Execution breakpoints require an aligned 4-byte PowerPC instruction")
+        self._range(address, size)
+        if kind not in range(5) or address % 4 or size != 4:
+            raise ValueError("Cemu breakpoints require an aligned 4-byte range")
         self._request(f"{'z' if remove else 'Z'}{kind},{address:x},{size:x}", ok=True)
 
     @contextmanager

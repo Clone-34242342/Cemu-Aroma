@@ -371,6 +371,8 @@ void GDBServer::ThreadFunc()
 			socklen_t size = sizeof(m_client_addr);
 			m_client_socket = accept(m_server_socket, reinterpret_cast<sockaddr*>(&m_client_addr), &size);
 			m_client_connected = m_client_socket != INVALID_SOCKET;
+			if (m_client_connected)
+				selectAndBreakThread(-1, [](OSThread_t*) {});
 			continue;
 		}
 		try
@@ -378,8 +380,16 @@ void GDBServer::ThreadFunc()
 			char prefix = readChar();
 			if (prefix == '\x03')
 			{
+				std::string status;
+				selectThread(0, [&status](OSThread_t* thread) {
+					status = fmt::format("T05thread:{:08X};", GET_THREAD_ID(thread));
+				});
+				if (status.empty())
+				{
+					SendRaw(fmt::format("${}#{:02x}", RESPONSE_ERROR, CommandContext::CalculateChecksum(RESPONSE_ERROR)));
+					continue;
+				}
 				selectAndBreakThread(-1, [](OSThread_t*) {});
-				auto status = fmt::format("T05thread:{:08X};", GET_THREAD_ID(coreinit::OSGetDefaultThread(1)));
 				if (m_resumed_context)
 				{
 					m_resumed_context->QueueResponse(status);

@@ -1,5 +1,9 @@
 # **Cemu - Wii U emulator**
 
+This fork adds Python access to memory, code, registers, breakpoints, and
+execution control without opening the PPC debugger window.
+See [Python debugging](README-PYTHON.md) for usage.
+
 [![Build Process](https://github.com/cemu-project/Cemu/actions/workflows/build.yml/badge.svg)](https://github.com/cemu-project/Cemu/actions/workflows/build.yml)
 [![Discord](https://img.shields.io/discord/286429969104764928?label=Cemu&logo=discord&logoColor=FFFFFF)](https://discord.gg/5psYsup)
 
