@@ -27,6 +27,7 @@ public:
 	~ExecutionBreakpoint();
 
 	[[nodiscard]] uint32 GetVisibleOpCode() const;
+	[[nodiscard]] uint32 GetOriginalOpCode() const { return m_origOpCode; }
 	[[nodiscard]] bool ShouldBreakThreads() const
 	{
 		return this->m_pauseThreads;
@@ -61,10 +62,7 @@ public:
 		this->m_pauseOnNextInterrupt = true;
 	};
 
-	void WriteNewOpCode(uint32 newOpCode)
-	{
-		this->m_origOpCode = newOpCode;
-	};
+	void WriteNewOpCode(uint32 newOpCode);
 
 private:
 	const MPTR m_address;

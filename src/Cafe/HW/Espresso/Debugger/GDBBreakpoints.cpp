@@ -128,14 +128,24 @@ void GDBServer::ExecutionBreakpoint::RemoveTemporarily()
 {
 	memory_writeU32(this->m_address, this->m_origOpCode);
 	PPCRecompiler_invalidateRange(this->m_address, this->m_address + 4);
-	this->m_restoreAfterInterrupt = true;
+	this->m_removedAfterInterrupt = true;
 }
 
 void GDBServer::ExecutionBreakpoint::Restore()
 {
 	memory_writeU32(this->m_address, DEBUGGER_BP_T_GDBSTUB_TW);
 	PPCRecompiler_invalidateRange(this->m_address, this->m_address + 4);
-	this->m_restoreAfterInterrupt = false;
+	this->m_removedAfterInterrupt = false;
+}
+
+void GDBServer::ExecutionBreakpoint::WriteNewOpCode(uint32 newOpCode)
+{
+	m_origOpCode = newOpCode;
+	if (m_removedAfterInterrupt)
+	{
+		memory_writeU32(m_address, newOpCode);
+		PPCRecompiler_invalidateRange(m_address, m_address + 4);
+	}
 }
 
 namespace coreinit

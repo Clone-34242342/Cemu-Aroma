@@ -30,6 +30,7 @@ public:
 		VCONT = 'v',
 		// Normal commands
 		CONTINUE = 'c',
+		DETACH = 'D',
 		IS_THREAD_RUNNING = 'T',
 		SET_ACTIVE_THREAD = 'H',
 		ACTIVE_THREAD_STATUS = '?',
@@ -58,15 +59,17 @@ public:
 					m_args.emplace_back(std::move(matchStr));
 			}
 			// send acknowledgement ahead of response
-			send(m_server->m_client_socket, RESPONSE_ACK.data(), (int)RESPONSE_ACK.size(), 0);
+			m_server->SendRaw(RESPONSE_ACK);
 		};
 		~CommandContext()
 		{
+			if (m_cancelled)
+				return;
 			// cemuLog_logDebug(LogType::Force, "[GDBStub] Received: {}", m_command);
 			// cemuLog_logDebug(LogType::Force, "[GDBStub] Responded: +{}", m_response);
 			auto response_data = EscapeMessage(m_response);
 			auto response_full = fmt::format("${}#{:02x}", response_data, CalculateChecksum(response_data));
-			send(m_server->m_client_socket, response_full.c_str(), (int)response_full.size(), 0);
+			m_server->SendRaw(response_full);
 		}
 		CommandContext(const CommandContext&) = delete;
 
@@ -131,14 +134,16 @@ public:
 			m_response += data;
 		}
 
+		void CancelResponse() { m_cancelled = true; }
 	private:
+		bool m_cancelled = false;
 		const std::regex m_regex{
 			R"((?:)"
 			R"((\?))"
 			R"(|(vCont\?))"
 			R"(|(vCont;)([a-zA-Z0-9-+=,\+:;]+))"
 			R"(|(qAttached))"
-			R"(|(qSupported):([a-zA-Z0-9-+=,\+;]+))"
+			R"(|(qSupported)(?::([a-zA-Z0-9-+=,\+;]+))?)"
 			R"(|(qTStatus))"
 			R"(|(qC))"
 			R"(|(qXfer):((?:features)|(?:threads)|(?:libraries)):read:([\w\.]*):([0-9a-zA-Z]+),([0-9a-zA-Z]+))"
@@ -150,7 +155,7 @@ public:
 			R"(|(c)([0-9A-Fa-f]+)?)"							  // (Legacy, supported by vCont) Continue all for active thread
 			R"(|([Zz])([0-4]),([0-9A-Fa-f]+),([0-9]))"			  // Insert/delete breakpoints
 			R"(|(g))"											  // Read registers for active thread
-			R"(|(G)([0-9A-Fa-f]+))"								  // Write registers for active thread
+			R"(|(G)([0-9A-Fa-fx]+))"								  // Write registers for active thread
 			R"(|(p)([0-9A-Fa-f]+))"								  // Read register for active thread
 			R"(|(P)([0-9A-Fa-f]+)=([0-9A-Fa-f]+))"				  // Write register for active thread
 			R"(|(m)([0-9A-Fa-f]+),([0-9A-Fa-f]+))"				  // Read memory
@@ -171,7 +176,7 @@ public:
 
 private:
 	static constexpr int s_maxGDBClients = 1;
-	static constexpr std::string_view s_supportedFeatures = "PacketSize=4096;qXfer:features:read+;qXfer:threads:read+;qXfer:libraries:read+;swbreak+;hwbreak+;vContSupported+";
+	static constexpr std::string_view s_supportedFeatures = "PacketSize=1000;qXfer:features:read+;qXfer:threads:read+;qXfer:libraries:read+;swbreak+;hwbreak+;vContSupported+;cemu-python-debug+";
 	static constexpr size_t s_maxPacketSize = 1024 * 4;
 	const uint16 m_port;
 
@@ -185,9 +190,9 @@ private:
 		LR = 67,
 		CTR = 68,
 		XER = 69,
-		F0_START = 71,
+		F0_START = 32,
 		F31_END = F0_START + 31,
-		FPSCR = 103
+		FPSCR = 70
 	};
 
 	static constexpr std::string_view RESPONSE_EMPTY = "";
@@ -196,8 +201,10 @@ private:
 	static constexpr std::string_view RESPONSE_OK = "OK";
 	static constexpr std::string_view RESPONSE_ERROR = "E01";
 
+	mutable std::mutex m_sendMutex;
+	void SendRaw(std::string_view data) const;
 	void ThreadFunc();
-	std::atomic_bool m_stopRequested;
+	std::atomic_bool m_stopRequested = false;
 	void HandleCommand(const std::string& command_str);
 	void HandleQuery(std::unique_ptr<CommandContext>& context) const;
 	void HandleVCont(std::unique_ptr<CommandContext>& context);
@@ -225,7 +232,7 @@ private:
 	MPTR m_entry_point{};
 	std::unique_ptr<CommandContext> m_resumed_context;
 
-	std::atomic_bool m_client_connected;
+	std::atomic_bool m_client_connected = false;
 	SOCKET m_server_socket = INVALID_SOCKET;
 	sockaddr_in m_server_addr{};
 	SOCKET m_client_socket = INVALID_SOCKET;
@@ -277,7 +284,7 @@ static constexpr std::string_view GDBTargetXML = R"(<?xml version="1.0"?>
         <reg name="xer" bitsize="32" type="uint32"/>
     </feature>
     <feature name="org.gnu.gdb.power.fpu">
-        <reg name="f0" bitsize="64" type="ieee_double" regnum="71"/>
+        <reg name="f0" bitsize="64" type="ieee_double" regnum="32"/>
         <reg name="f1" bitsize="64" type="ieee_double"/>
         <reg name="f2" bitsize="64" type="ieee_double"/>
         <reg name="f3" bitsize="64" type="ieee_double"/>
@@ -309,7 +316,7 @@ static constexpr std::string_view GDBTargetXML = R"(<?xml version="1.0"?>
         <reg name="f29" bitsize="64" type="ieee_double"/>
         <reg name="f30" bitsize="64" type="ieee_double"/>
         <reg name="f31" bitsize="64" type="ieee_double"/>
-        <reg name="fpscr" bitsize="32" group="float"/>
+        <reg name="fpscr" bitsize="32" group="float" regnum="70"/>
     </feature>
 </target>)";
 

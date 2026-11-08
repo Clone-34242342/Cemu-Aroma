@@ -39,26 +39,45 @@ static std::vector<MPTR> findNextInstruction(MPTR currAddress, uint32 lr, uint32
 		BOField BO{};
 		bool AA, LK;
 		decodeOp_BC(nextInstr, BD, BO, BI, AA, LK);
-		if (!LK)
+		if (!AA)
 			BD += currAddress;
 		return {currAddress + 4, BD};
 	}
 	if (GetPrimaryOpcode(nextInstr) == PrimaryOpcode::GROUP_19 && GetGroup19Opcode(nextInstr) == Opcode19::BCLR)
 	{
-		return {currAddress + 4, lr};
+		return {currAddress + 4, lr & ~3u};
 	}
 	if (GetPrimaryOpcode(nextInstr) == PrimaryOpcode::GROUP_19 && GetGroup19Opcode(nextInstr) == Opcode19::BCCTR)
 	{
-		return {currAddress + 4, ctr};
+		return {currAddress + 4, ctr & ~3u};
 	}
 	return {currAddress + 4};
+}
+
+// Scheduler lock protects this set. Resume only suspensions owned by this debugger.
+static std::set<MPTR> s_debuggerSuspendedThreads;
+
+static void suspendDebugThread(OSThread_t* thread)
+{
+	if (s_debuggerSuspendedThreads.insert(GET_THREAD_ID(thread)).second)
+		coreinit::__OSSuspendThreadNolock(thread);
+}
+
+static void resumeDebugThread(OSThread_t* thread)
+{
+	if (s_debuggerSuspendedThreads.erase(GET_THREAD_ID(thread)))
+		coreinit::__OSResumeThreadInternal(thread, 1);
 }
 
 template<typename F>
 static void selectThread(sint64 selectorId, F&& action_for_thread)
 {
 	__OSLockScheduler();
-	cemu_assert_debug(activeThreadCount != 0);
+	if (activeThreadCount == 0)
+	{
+		__OSUnlockScheduler();
+		return;
+	}
 
 	if (selectorId == -1)
 	{
@@ -92,14 +111,18 @@ template<typename F>
 static void selectAndBreakThread(sint64 selectorId, F&& action_for_thread)
 {
 	__OSLockScheduler();
-	cemu_assert_debug(activeThreadCount != 0);
+	if (activeThreadCount == 0)
+	{
+		__OSUnlockScheduler();
+		return;
+	}
 
 	std::vector<OSThread_t*> pausedThreads;
 	if (selectorId == -1)
 	{
 		for (sint32 i = 0; i < activeThreadCount; i++)
 		{
-			coreinit::__OSSuspendThreadNolock(GET_THREAD_BY_ID(activeThread[i]));
+			suspendDebugThread(GET_THREAD_BY_ID(activeThread[i]));
 			pausedThreads.emplace_back(GET_THREAD_BY_ID(activeThread[i]));
 		}
 	}
@@ -114,7 +137,7 @@ static void selectAndBreakThread(sint64 selectorId, F&& action_for_thread)
 				thread = GET_THREAD_BY_ID(activeThread[i]);
 			}
 		}
-		coreinit::__OSSuspendThreadNolock(thread);
+		suspendDebugThread(thread);
 		pausedThreads.emplace_back(thread);
 	}
 	else if (selectorId > 0)
@@ -124,7 +147,7 @@ static void selectAndBreakThread(sint64 selectorId, F&& action_for_thread)
 			auto* thread = GET_THREAD_BY_ID(activeThread[i]);
 			if (GET_THREAD_ID(thread) == selectorId)
 			{
-				coreinit::__OSSuspendThreadNolock(thread);
+				suspendDebugThread(thread);
 				pausedThreads.emplace_back(thread);
 				break;
 			}
@@ -143,19 +166,23 @@ static void selectAndBreakThread(sint64 selectorId, F&& action_for_thread)
 static void selectAndResumeThread(sint64 selectorId)
 {
 	__OSLockScheduler();
-	cemu_assert_debug(activeThreadCount != 0);
+	if (activeThreadCount == 0)
+	{
+		__OSUnlockScheduler();
+		return;
+	}
 
 	if (selectorId == -1)
 	{
 		for (sint32 i = 0; i < activeThreadCount; i++)
 		{
-			coreinit::__OSResumeThreadInternal(GET_THREAD_BY_ID(activeThread[i]), 4);
+			resumeDebugThread(GET_THREAD_BY_ID(activeThread[i]));
 		}
 	}
 	else if (selectorId == 0)
 	{
 		// Use first thread if attempted to be stopped
-		coreinit::__OSResumeThreadInternal(coreinit::OSGetDefaultThread(1), 1);
+		resumeDebugThread(coreinit::OSGetDefaultThread(1));
 	}
 	else if (selectorId > 0)
 	{
@@ -164,7 +191,7 @@ static void selectAndResumeThread(sint64 selectorId)
 			auto* thread = GET_THREAD_BY_ID(activeThread[i]);
 			if (GET_THREAD_ID(thread) == selectorId)
 			{
-				coreinit::__OSResumeThreadInternal(thread, 1);
+				resumeDebugThread(thread);
 				break;
 			}
 		}
@@ -197,7 +224,11 @@ static void waitForBrokenThreads(std::unique_ptr<GDBServer::CommandContext> cont
 static void breakThreads(sint64 trappedThread)
 {
 	__OSLockScheduler();
-	cemu_assert_debug(activeThreadCount != 0);
+	if (activeThreadCount == 0)
+	{
+		__OSUnlockScheduler();
+		return;
+	}
 
 	// First, break other threads
 	OSThread_t* mainThread = nullptr;
@@ -209,13 +240,13 @@ static void breakThreads(sint64 trappedThread)
 		}
 		else
 		{
-			coreinit::__OSSuspendThreadNolock(GET_THREAD_BY_ID(activeThread[i]));
+			suspendDebugThread(GET_THREAD_BY_ID(activeThread[i]));
 		}
 	}
 
 	// Second, break trapped thread itself which should also pause execution of this handler
 	// This will temporarily lift the scheduler lock until it's resumed from its suspension
-	coreinit::__OSSuspendThreadNolock(mainThread);
+	suspendDebugThread(mainThread);
 
 	__OSUnlockScheduler();
 }
@@ -233,23 +264,23 @@ GDBServer::GDBServer(uint16 port)
 
 GDBServer::~GDBServer()
 {
+	m_stopRequested = true;
+#if BOOST_OS_WINDOWS
+	constexpr int how = SD_BOTH;
+#else
+	constexpr int how = SHUT_RDWR;
+#endif
 	if (m_client_socket != INVALID_SOCKET)
-	{
-		// close socket from other thread to forcefully stop accept() call
-		closesocket(m_client_socket);
-		m_client_socket = INVALID_SOCKET;
-	}
-
+		shutdown(m_client_socket, how);
 	if (m_server_socket != INVALID_SOCKET)
-	{
+		shutdown(m_server_socket, how);
+	if (m_thread.joinable())
+		m_thread.join();
+	if (m_server_socket != INVALID_SOCKET)
 		closesocket(m_server_socket);
-	}
 #if BOOST_OS_WINDOWS
 	WSACleanup();
 #endif
-
-	m_stopRequested = false;
-	m_thread.join();
 }
 
 bool GDBServer::Initialize()
@@ -299,142 +330,175 @@ bool GDBServer::Initialize()
 	return true;
 }
 
+void GDBServer::SendRaw(std::string_view data) const
+{
+	std::lock_guard lock(m_sendMutex);
+	while (!data.empty())
+	{
+#if defined(MSG_NOSIGNAL)
+		int sent = send(m_client_socket, data.data(), static_cast<int>(data.size()), MSG_NOSIGNAL);
+#else
+		int sent = send(m_client_socket, data.data(), static_cast<int>(data.size()), 0);
+#endif
+		if (sent <= 0)
+			return;
+		data.remove_prefix(sent);
+	}
+}
+
 void GDBServer::ThreadFunc()
 {
 	SetThreadName("GDBServer");
-
+	auto readExact = [&](char* buffer, size_t length) {
+		while (length)
+		{
+			int received = recv(m_client_socket, buffer, static_cast<int>(length), 0);
+			if (received <= 0)
+				throw std::runtime_error("GDB client disconnected");
+			buffer += received;
+			length -= received;
+		}
+	};
+	auto readChar = [&]() {
+		char c;
+		readExact(&c, 1);
+		return c;
+	};
 	while (!m_stopRequested)
 	{
 		if (!m_client_connected)
 		{
-			cemuLog_logDebug(LogType::Force, "[GDBStub] Waiting for client to connect on port {}...", m_port);
-			socklen_t client_addr_size = sizeof(m_client_addr);
-			m_client_socket = accept(m_server_socket, (struct sockaddr*)&m_client_addr, &client_addr_size);
-			m_client_connected = m_client_socket != SOCKET_ERROR;
+			socklen_t size = sizeof(m_client_addr);
+			m_client_socket = accept(m_server_socket, reinterpret_cast<sockaddr*>(&m_client_addr), &size);
+			m_client_connected = m_client_socket != INVALID_SOCKET;
+			continue;
 		}
-		else
+		try
 		{
-			auto receiveMessage = [&](char* buffer, const int32_t length) -> bool {
-				if (recv(m_client_socket, buffer, length, 0) != SOCKET_ERROR)
-					return false;
-				return true;
-			};
-
-			auto readChar = [&]() -> char {
-				char ret = 0;
-				recv(m_client_socket, &ret, 1, 0);
-				return ret;
-			};
-
-			char packetPrefix = readChar();
-
-			switch (packetPrefix)
+			char prefix = readChar();
+			if (prefix == '\x03')
 			{
-			case '+':
-			case '-':
-				break;
-			case '\x03':
-			{
-				cemuLog_logDebug(LogType::Force, "[GDBStub] Received interrupt (pressed CTRL+C?) from client!");
-				selectAndBreakThread(-1, [](OSThread_t* thread) {
-				});
-				auto thread_status = fmt::format("T05thread:{:08X};", GET_THREAD_ID(coreinit::OSGetDefaultThread(1)));
-				if (this->m_resumed_context)
+				selectAndBreakThread(-1, [](OSThread_t*) {});
+				auto status = fmt::format("T05thread:{:08X};", GET_THREAD_ID(coreinit::OSGetDefaultThread(1)));
+				if (m_resumed_context)
 				{
-					this->m_resumed_context->QueueResponse(thread_status);
-					this->m_resumed_context.reset();
+					m_resumed_context->QueueResponse(status);
+					m_resumed_context.reset();
 				}
 				else
-				{
-					auto response_full = fmt::format("+${}#{:02x}", thread_status, CommandContext::CalculateChecksum(thread_status));
-					send(m_client_socket, response_full.c_str(), (int)response_full.size(), 0);
-				}
-				break;
+					SendRaw(fmt::format("${}#{:02x}", status, CommandContext::CalculateChecksum(status)));
 			}
-			case '$':
+			else if (prefix == '$')
 			{
 				std::string message;
-				uint8 checkedSum = 0;
-				for (uint32_t i = 1;; i++)
+				char c;
+				while ((c = readChar()) != '#')
 				{
-					char c = readChar();
-					if (c == '#')
-						break;
-					checkedSum += static_cast<uint8>(c);
+					if (message.size() >= s_maxPacketSize)
+						throw std::runtime_error("GDB packet too large");
 					message.push_back(c);
-
-					if (i >= s_maxPacketSize)
-						cemuLog_logDebug(LogType::Force, "[GDBStub] Received too big of a buffer: {}", message);
 				}
-				char checkSumStr[2];
-				receiveMessage(checkSumStr, 2);
-				uint32_t checkSum = std::stoi(std::string(checkSumStr, sizeof(checkSumStr)), nullptr, 16);
-				assert((checkedSum & 0xFF) == checkSum);
-
-				HandleCommand(message);
-				break;
-			}
-			default:
-				// cemuLog_logDebug(LogType::Force, "[GDBStub] Unknown packet start: {}", packetPrefix);
-				break;
+				char checksum[2];
+				readExact(checksum, sizeof(checksum));
+				unsigned int expected = 0;
+				auto result = std::from_chars(checksum, checksum + 2, expected, 16);
+				if (result.ec != std::errc{} || result.ptr != checksum + 2 || expected != CommandContext::CalculateChecksum(message))
+					SendRaw(RESPONSE_NACK);
+				else
+					HandleCommand(message);
 			}
 		}
+		catch (const std::exception& error)
+		{
+			cemuLog_logDebug(LogType::Force, "[GDBStub] {}", error.what());
+			if (m_resumed_context)
+				m_resumed_context->CancelResponse();
+			m_resumed_context.reset();
+			if (!m_stopRequested)
+			{
+				selectAndBreakThread(-1, [](OSThread_t*) {});
+				m_patchedInstructions.clear();
+				m_watch_point.reset();
+				selectAndResumeThread(-1);
+			}
+			closesocket(m_client_socket);
+			m_client_socket = INVALID_SOCKET;
+			m_client_connected = false;
+		}
 	}
-
 	if (m_client_socket != INVALID_SOCKET)
+	{
 		closesocket(m_client_socket);
+		m_client_socket = INVALID_SOCKET;
+	}
 }
 
 void GDBServer::HandleCommand(const std::string& command_str)
 {
+	if (command_str.empty())
+		return;
 	auto context = std::make_unique<CommandContext>(this, command_str);
+	if (!context->IsValid())
+		return context->QueueResponse(RESPONSE_EMPTY);
 
-	if (context->IsValid())
+
+	try
 	{
-		// cemuLog_logDebug(LogType::Force, "[GDBStub] Extracted Command {}", fmt::join(context->GetArgs(), ","));
-	}
+		switch (context->GetType())
+		{
+		// Extended commands
+		case CMDType::QUERY_GET:
+		case CMDType::QUERY_SET:
+			return HandleQuery(context);
+		case CMDType::VCONT:
+			return HandleVCont(context);
+		// Regular commands
+		case CMDType::IS_THREAD_RUNNING:
+			return CMDIsThreadActive(context);
+		case CMDType::SET_ACTIVE_THREAD:
+			return CMDSetActiveThread(context);
+		case CMDType::ACTIVE_THREAD_STATUS:
+			return CMDGetThreadStatus(context);
+		case CMDType::CONTINUE:
+			return CMDContinue(context);
+		case CMDType::DETACH:
+			m_patchedInstructions.clear();
+			m_watch_point.reset();
+			if (m_resumed_context)
+				m_resumed_context->CancelResponse();
+			m_resumed_context.reset();
+			selectAndResumeThread(-1);
+			return context->QueueResponse(RESPONSE_OK);
+		case CMDType::ACTIVE_THREAD_STEP:
+			break;
+		case CMDType::REGISTER_READ:
+			return CMDReadRegister(context);
+		case CMDType::REGISTER_SET:
+			return CMDWriteRegister(context);
+		case CMDType::REGISTERS_READ:
+			return CMDReadRegisters(context);
+		case CMDType::REGISTERS_WRITE:
+			return CMDWriteRegisters(context);
+		case CMDType::MEMORY_READ:
+			return CMDReadMemory(context);
+		case CMDType::MEMORY_WRITE:
+			return CMDWriteMemory(context);
+		case CMDType::BREAKPOINT_SET:
+			return CMDInsertBreakpoint(context);
+		case CMDType::BREAKPOINT_REMOVE:
+			return CMDDeleteBreakpoint(context);
+		case CMDType::INVALID:
+		default:
+			return CMDNotFound(context);
+		}
 
-	switch (context->GetType())
+		CMDNotFound(context);
+	}
+	catch (const std::exception&)
 	{
-	// Extended commands
-	case CMDType::QUERY_GET:
-	case CMDType::QUERY_SET:
-		return HandleQuery(context);
-	case CMDType::VCONT:
-		return HandleVCont(context);
-	// Regular commands
-	case CMDType::IS_THREAD_RUNNING:
-		return CMDIsThreadActive(context);
-	case CMDType::SET_ACTIVE_THREAD:
-		return CMDSetActiveThread(context);
-	case CMDType::ACTIVE_THREAD_STATUS:
-		return CMDGetThreadStatus(context);
-	case CMDType::CONTINUE:
-		return CMDContinue(context);
-	case CMDType::ACTIVE_THREAD_STEP:
-		break;
-	case CMDType::REGISTER_READ:
-		return CMDReadRegister(context);
-	case CMDType::REGISTER_SET:
-		return CMDWriteRegister(context);
-	case CMDType::REGISTERS_READ:
-		return CMDReadRegisters(context);
-	case CMDType::REGISTERS_WRITE:
-		return CMDWriteRegisters(context);
-	case CMDType::MEMORY_READ:
-		return CMDReadMemory(context);
-	case CMDType::MEMORY_WRITE:
-		return CMDWriteMemory(context);
-	case CMDType::BREAKPOINT_SET:
-		return CMDInsertBreakpoint(context);
-	case CMDType::BREAKPOINT_REMOVE:
-		return CMDDeleteBreakpoint(context);
-	case CMDType::INVALID:
-	default:
-		return CMDNotFound(context);
+		if (context)
+			context->QueueResponse(RESPONSE_ERROR);
 	}
-
-	CMDNotFound(context);
 }
 
 void GDBServer::HandleQuery(std::unique_ptr<CommandContext>& context) const
@@ -458,8 +522,9 @@ void GDBServer::HandleQuery(std::unique_ptr<CommandContext>& context) const
 	}
 	else if (query_cmd == "qC")
 	{
-		context->QueueResponse("QC");
-		context->QueueResponse(std::to_string(m_activeThreadContinueSelector));
+		selectThread(m_activeThreadSelector, [&context](OSThread_t* thread) {
+			context->QueueResponse(fmt::format("QC{:x}", GET_THREAD_ID(thread)));
+		});
 	}
 	else if (query_cmd == "qOffsets")
 	{
@@ -612,7 +677,7 @@ void GDBServer::HandleVCont(std::unique_ptr<CommandContext>& context)
 		else if (operationType == "s" || operationType.starts_with("S"))
 		{
 			selectThread(threadSelector, [this](OSThread_t* thread) {
-				auto nextInstructions = findNextInstruction(thread->context.srr0, thread->context.lr, thread->context.ctr);
+				auto nextInstructions = findNextInstruction(thread->context.srr0, CPU_swapEndianU32(thread->context.lr), thread->context.ctr);
 				for (MPTR nextInstr : nextInstructions)
 				{
 					auto bpIt = m_patchedInstructions.find(nextInstr);
@@ -719,7 +784,7 @@ void GDBServer::CMDReadRegister(std::unique_ptr<CommandContext>& context) const
 void GDBServer::CMDWriteRegister(std::unique_ptr<CommandContext>& context) const
 {
 	sint32 reg = std::stoi(context->GetArgs()[1], nullptr, 16);
-	uint64 value = std::stoll(context->GetArgs()[2], nullptr, 16);
+	uint64 value = std::stoull(context->GetArgs()[2], nullptr, 16);
 	selectThread(m_activeThreadSelector, [reg, value, &context](OSThread_t* thread) {
 		auto& cpu = thread->context;
 		if (reg >= RegisterID::R0_START && reg <= RegisterID::R31_END)
@@ -769,21 +834,49 @@ void GDBServer::CMDWriteRegister(std::unique_ptr<CommandContext>& context) const
 void GDBServer::CMDReadRegisters(std::unique_ptr<CommandContext>& context) const
 {
 	selectThread(m_activeThreadSelector, [&context](OSThread_t* thread) {
-		for (uint32& reg : thread->context.gpr)
-		{
+		auto& cpu = thread->context;
+		for (uint32 reg : cpu.gpr)
 			context->QueueResponse(fmt::format("{:08X}", CPU_swapEndianU32(reg)));
-		}
+		for (auto& reg : cpu.fp_ps0)
+			context->QueueResponse(fmt::format("{:016X}", reg.value()));
+		context->QueueResponse(fmt::format("{:08X}xxxxxxxx{:08X}{:08X}{:08X}{:08X}{:08X}",
+			cpu.srr0, cpu.cr, CPU_swapEndianU32(cpu.lr), cpu.ctr, cpu.xer, cpu.fpscr.fpscr.value()));
 	});
 }
 
 void GDBServer::CMDWriteRegisters(std::unique_ptr<CommandContext>& context) const
 {
-	selectThread(m_activeThreadSelector, [&context](OSThread_t* thread) {
-		auto& registers = context->GetArgs()[1];
-		for (uint32 i = 0; i < 32; i++)
+	const auto& data = context->GetArgs()[1];
+	// 32 GPRs, 32 doubles, then PC/MSR/CR/LR/CTR/XER/FPSCR, in register-number order.
+	if (data.size() != 824)
+		return context->QueueResponse(RESPONSE_ERROR);
+	std::array<uint64, 71> values{};
+	size_t offset = 0;
+	for (size_t i = 0; i < values.size(); ++i)
+	{
+		size_t width = (i >= 32 && i < 64) ? 16 : 8;
+		if (i != RegisterID::MSR) // MSR is unavailable and may be encoded as xxxxxxxx.
 		{
-			thread->context.gpr[i] = CPU_swapEndianU32(std::stoi(registers.substr(i * 2, 2), nullptr, 16));
+			auto result = std::from_chars(data.data() + offset, data.data() + offset + width, values[i], 16);
+			if (result.ec != std::errc{} || result.ptr != data.data() + offset + width)
+				return context->QueueResponse(RESPONSE_ERROR);
 		}
+		offset += width;
+	}
+	selectThread(m_activeThreadSelector, [&context, &values](OSThread_t* thread) {
+		auto& cpu = thread->context;
+		for (size_t i = 0; i < 32; ++i)
+		{
+			cpu.gpr[i] = CPU_swapEndianU32(static_cast<uint32>(values[i]));
+			cpu.fp_ps0[i] = values[i + 32];
+		}
+		cpu.srr0 = values[RegisterID::PC];
+		cpu.cr = values[RegisterID::CR];
+		cpu.lr = CPU_swapEndianU32(static_cast<uint32>(values[RegisterID::LR]));
+		cpu.ctr = values[RegisterID::CTR];
+		cpu.xer = values[RegisterID::XER];
+		cpu.fpscr.fpscr = static_cast<uint32>(values[RegisterID::FPSCR]);
+		context->QueueResponse(RESPONSE_OK);
 	});
 }
 
@@ -793,7 +886,7 @@ void GDBServer::CMDReadMemory(std::unique_ptr<CommandContext>& context)
 	sint64 length = std::stoul(context->GetArgs()[2], nullptr, 16);
 
 	// todo: handle cross-mmu-range memory requests
-	if (!memory_isAddressRangeAccessible(addr, length))
+	if (length <= 0 || length > s_maxPacketSize / 2 || addr > UINT32_MAX || length > UINT32_MAX - addr || !memory_isAddressRangeAccessible(addr, length))
 		return context->QueueResponse(RESPONSE_ERROR);
 
 	std::string memoryRepr;
@@ -803,13 +896,16 @@ void GDBServer::CMDReadMemory(std::unique_ptr<CommandContext>& context)
 		memoryRepr += fmt::format("{:02X}", values[i]);
 	}
 
-	auto patchesRange = m_patchedInstructions.lower_bound(addr);
-	while (patchesRange != m_patchedInstructions.end() && patchesRange->first < (addr + length))
+	// A read may begin inside an instruction; return all original bytes covered by breakpoints.
+	for (sint64 i = 0; i < length; ++i)
 	{
-		auto replStr = fmt::format("{:02X}", patchesRange->second.GetVisibleOpCode());
-		memoryRepr[(patchesRange->first - addr) * 2] = replStr[0];
-		memoryRepr[(patchesRange->first - addr) * 2 + 1] = replStr[1];
-		patchesRange++;
+		auto bp = m_patchedInstructions.find(static_cast<MPTR>((addr + i) & ~3ull));
+		if (bp != m_patchedInstructions.end())
+		{
+			uint32 shift = (3 - ((addr + i) & 3)) * 8;
+			auto byte = (bp->second.GetOriginalOpCode() >> shift) & 0xff;
+			memoryRepr.replace(i * 2, 2, fmt::format("{:02X}", byte));
+		}
 	}
 	return context->QueueResponse(memoryRepr);
 }
@@ -818,10 +914,12 @@ void GDBServer::CMDWriteMemory(std::unique_ptr<CommandContext>& context)
 {
 	sint64 addr = std::stoul(context->GetArgs()[1], nullptr, 16);
 	sint64 length = std::stoul(context->GetArgs()[2], nullptr, 16);
-	auto source = context->GetArgs()[3];
+	const auto& source = context->GetArgs()[3];
+	if (length <= 0 || length > s_maxPacketSize / 2 || source.size() != length * 2)
+		return context->QueueResponse(RESPONSE_ERROR);
 
 	// todo: handle cross-mmu-range memory requests
-	if (!memory_isAddressRangeAccessible(addr, length))
+	if (length <= 0 || length > s_maxPacketSize / 2 || addr > UINT32_MAX || length > UINT32_MAX - addr || !memory_isAddressRangeAccessible(addr, length))
 		return context->QueueResponse(RESPONSE_ERROR);
 
 	uint8* values = memory_getPointerFromVirtualOffset(addr);
@@ -832,9 +930,9 @@ void GDBServer::CMDWriteMemory(std::unique_ptr<CommandContext>& context)
 		if (result.ec == std::errc::invalid_argument || result.ec == std::errc::result_out_of_range)
 			return context->QueueResponse(RESPONSE_ERROR);
 
-		if (auto it = m_patchedInstructions.find(addr + i); it != m_patchedInstructions.end())
+		if (auto it = m_patchedInstructions.find(static_cast<MPTR>((addr + i) & ~3ull)); it != m_patchedInstructions.end())
 		{
-			uint32 newOpCode = it->second.GetVisibleOpCode();
+			uint32 newOpCode = it->second.GetOriginalOpCode();
 			uint32 byteIndex = 3 - ((addr + i) % 4);			// inverted because of big endian, so address 0 is the highest byte
 			newOpCode &= ~(0xFF << (byteIndex * 8));			// mask out the byte
 			newOpCode |= ((uint32)hexValue << (byteIndex * 8)); // set new byte with OR
@@ -845,13 +943,18 @@ void GDBServer::CMDWriteMemory(std::unique_ptr<CommandContext>& context)
 			values[i] = hexValue;
 		}
 	}
+	PPCRecompiler_invalidateRange(static_cast<uint32>(addr), static_cast<uint32>(std::min<sint64>(addr + length, PPC_REC_CODE_AREA_END)));
 	return context->QueueResponse(RESPONSE_OK);
 }
 
 void GDBServer::CMDInsertBreakpoint(std::unique_ptr<CommandContext>& context)
 {
 	auto type = std::stoul(context->GetArgs()[1], nullptr, 16);
-	MPTR addr = static_cast<MPTR>(std::stoul(context->GetArgs()[2], nullptr, 16));
+	auto address = std::stoull(context->GetArgs()[2], nullptr, 16);
+	auto size = std::stoul(context->GetArgs()[3], nullptr, 16);
+	if (type > 4 || size != 4 || address > UINT32_MAX - 4 || (address & 3) || !memory_isAddressRangeAccessible(address, 4))
+		return context->QueueResponse(RESPONSE_ERROR);
+	MPTR addr = static_cast<MPTR>(address);
 
 	if (type == 0 || type == 1)
 	{
@@ -874,7 +977,11 @@ void GDBServer::CMDInsertBreakpoint(std::unique_ptr<CommandContext>& context)
 void GDBServer::CMDDeleteBreakpoint(std::unique_ptr<CommandContext>& context)
 {
 	auto type = std::stoul(context->GetArgs()[1], nullptr, 16);
-	MPTR addr = static_cast<MPTR>(std::stoul(context->GetArgs()[2], nullptr, 16));
+	auto address = std::stoull(context->GetArgs()[2], nullptr, 16);
+	auto size = std::stoul(context->GetArgs()[3], nullptr, 16);
+	if (type > 4 || size != 4 || address > UINT32_MAX - 4 || (address & 3) || !memory_isAddressRangeAccessible(address, 4))
+		return context->QueueResponse(RESPONSE_ERROR);
+	MPTR addr = static_cast<MPTR>(address);
 
 	if (type == 0 || type == 1)
 	{
@@ -920,7 +1027,7 @@ void GDBServer::HandleTrapInstruction(PPCInterpreter_t* hCPU)
 		for (MPTR nextInstr : nextInstructions)
 		{
 			if (!m_patchedInstructions.contains(nextInstr))
-				this->m_patchedInstructions.try_emplace(nextInstr, nextInstr, BreakpointType::BP_STEP_POINT, false, "");
+				this->m_patchedInstructions.try_emplace(nextInstr, nextInstr, BreakpointType::BP_RESTORE_POINT, false, "");
 		}
 		patchedBP->second.RemoveTemporarily();
 	}
