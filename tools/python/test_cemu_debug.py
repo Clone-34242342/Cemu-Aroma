@@ -183,6 +183,27 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(_decode(packet[1:packet.rindex(b"#")]), raw)
         self.assertEqual(_decode(b"0* "), b"0000")
 
+    def test_failed_detach_preserves_original_exception(self):
+        peer = Peer([("qSupported:multiprocess-", "cemu-python-debug+"),
+                     ("interrupt", "T05thread:1000;"), ("Hg1000", "OK"),
+                     ("D", None)])
+        try:
+            with self.assertRaisesRegex(RuntimeError, "original experiment failure"):
+                with CemuDebug(peer.port, timeout=1):
+                    raise RuntimeError("original experiment failure")
+        finally:
+            peer.join()
+
+    def test_connect_waits_for_title_initialization(self):
+        peer = Peer([("qSupported:multiprocess-", "cemu-python-debug+"),
+                     ("interrupt", "E01"), ("interrupt", "T05thread:1000;"),
+                     ("Hg1000", "OK"), ("D", "OK")])
+        try:
+            with CemuDebug(peer.port, timeout=1) as client:
+                self.assertFalse(client.running)
+        finally:
+            peer.join()
+
 
 if __name__ == "__main__":
     unittest.main()

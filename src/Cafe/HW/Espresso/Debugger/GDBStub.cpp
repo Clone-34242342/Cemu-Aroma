@@ -390,6 +390,7 @@ void GDBServer::ThreadFunc()
 					continue;
 				}
 				selectAndBreakThread(-1, [](OSThread_t*) {});
+				std::lock_guard runLock(m_runMutex);
 				if (m_resumed_context)
 				{
 					m_resumed_context->QueueResponse(status);
@@ -421,14 +422,20 @@ void GDBServer::ThreadFunc()
 		catch (const std::exception& error)
 		{
 			cemuLog_logDebug(LogType::Force, "[GDBStub] {}", error.what());
-			if (m_resumed_context)
-				m_resumed_context->CancelResponse();
-			m_resumed_context.reset();
+			{
+				std::lock_guard runLock(m_runMutex);
+				if (m_resumed_context)
+					m_resumed_context->CancelResponse();
+				m_resumed_context.reset();
+			}
 			if (!m_stopRequested)
 			{
 				selectAndBreakThread(-1, [](OSThread_t*) {});
-				m_patchedInstructions.clear();
-				m_watch_point.reset();
+				{
+					std::lock_guard breakpointLock(m_breakpointMutex);
+					m_patchedInstructions.clear();
+					m_watch_point.reset();
+				}
 				selectAndResumeThread(-1);
 			}
 			closesocket(m_client_socket);
@@ -472,11 +479,18 @@ void GDBServer::HandleCommand(const std::string& command_str)
 		case CMDType::CONTINUE:
 			return CMDContinue(context);
 		case CMDType::DETACH:
-			m_patchedInstructions.clear();
-			m_watch_point.reset();
-			if (m_resumed_context)
-				m_resumed_context->CancelResponse();
-			m_resumed_context.reset();
+			selectAndBreakThread(-1, [](OSThread_t*) {});
+			{
+				std::lock_guard breakpointLock(m_breakpointMutex);
+				m_patchedInstructions.clear();
+				m_watch_point.reset();
+			}
+			{
+				std::lock_guard runLock(m_runMutex);
+				if (m_resumed_context)
+					m_resumed_context->CancelResponse();
+				m_resumed_context.reset();
+			}
 			selectAndResumeThread(-1);
 			return context->QueueResponse(RESPONSE_OK);
 		case CMDType::ACTIVE_THREAD_STEP:
@@ -669,10 +683,16 @@ void GDBServer::HandleVCont(std::unique_ptr<CommandContext>& context)
 	else if (vcont_cmd != "vCont;")
 		return context->QueueResponse(RESPONSE_EMPTY);
 
-	m_resumed_context = std::move(context);
+	const std::string operations = context->GetArgs()[1];
+	{
+		std::lock_guard runLock(m_runMutex);
+		if (m_resumed_context)
+			return context->QueueResponse(RESPONSE_ERROR);
+		m_resumed_context = std::move(context);
+	}
 
 	bool resumedNoThreads = true;
-	for (const auto operation : TokenizeView(m_resumed_context->GetArgs()[1], ';'))
+	for (const auto operation : TokenizeView(operations, ';'))
 	{
 		// todo: this might have issues with the signal versions (C/S)
 		// todo: test whether this works with multiple vCont;c:123123;c:123123
@@ -687,6 +707,7 @@ void GDBServer::HandleVCont(std::unique_ptr<CommandContext>& context)
 		else if (operationType == "s" || operationType.starts_with("S"))
 		{
 			selectThread(threadSelector, [this](OSThread_t* thread) {
+				std::lock_guard breakpointLock(m_breakpointMutex);
 				auto nextInstructions = findNextInstruction(thread->context.srr0, CPU_swapEndianU32(thread->context.lr), thread->context.ctr);
 				for (MPTR nextInstr : nextInstructions)
 				{
@@ -709,7 +730,12 @@ void GDBServer::HandleVCont(std::unique_ptr<CommandContext>& context)
 
 void GDBServer::CMDContinue(std::unique_ptr<CommandContext>& context)
 {
-	m_resumed_context = std::move(context);
+	{
+		std::lock_guard runLock(m_runMutex);
+		if (m_resumed_context)
+			return context->QueueResponse(RESPONSE_ERROR);
+		m_resumed_context = std::move(context);
+	}
 	selectAndResumeThread(m_activeThreadContinueSelector);
 }
 
@@ -892,6 +918,7 @@ void GDBServer::CMDWriteRegisters(std::unique_ptr<CommandContext>& context) cons
 
 void GDBServer::CMDReadMemory(std::unique_ptr<CommandContext>& context)
 {
+	std::lock_guard breakpointLock(m_breakpointMutex);
 	uint64 addr = std::stoull(context->GetArgs()[1], nullptr, 16);
 	uint64 length = std::stoull(context->GetArgs()[2], nullptr, 16);
 
@@ -922,6 +949,7 @@ void GDBServer::CMDReadMemory(std::unique_ptr<CommandContext>& context)
 
 void GDBServer::CMDWriteMemory(std::unique_ptr<CommandContext>& context)
 {
+	std::lock_guard breakpointLock(m_breakpointMutex);
 	uint64 addr = std::stoull(context->GetArgs()[1], nullptr, 16);
 	uint64 length = std::stoull(context->GetArgs()[2], nullptr, 16);
 	const auto& source = context->GetArgs()[3];
@@ -960,6 +988,7 @@ void GDBServer::CMDWriteMemory(std::unique_ptr<CommandContext>& context)
 
 void GDBServer::CMDInsertBreakpoint(std::unique_ptr<CommandContext>& context)
 {
+	std::lock_guard breakpointLock(m_breakpointMutex);
 	auto type = std::stoul(context->GetArgs()[1], nullptr, 16);
 	auto address = std::stoull(context->GetArgs()[2], nullptr, 16);
 	auto size = std::stoul(context->GetArgs()[3], nullptr, 16);
@@ -987,6 +1016,7 @@ void GDBServer::CMDInsertBreakpoint(std::unique_ptr<CommandContext>& context)
 
 void GDBServer::CMDDeleteBreakpoint(std::unique_ptr<CommandContext>& context)
 {
+	std::lock_guard breakpointLock(m_breakpointMutex);
 	auto type = std::stoul(context->GetArgs()[1], nullptr, 16);
 	auto address = std::stoull(context->GetArgs()[2], nullptr, 16);
 	auto size = std::stoul(context->GetArgs()[3], nullptr, 16);
@@ -1016,6 +1046,7 @@ void GDBServer::CMDDeleteBreakpoint(std::unique_ptr<CommandContext>& context)
 // Internal functions for control
 void GDBServer::HandleTrapInstruction(PPCInterpreter_t* hCPU)
 {
+	std::unique_lock breakpointLock(m_breakpointMutex);
 	// First, restore any removed breakpoints
 	for (auto& bp : m_patchedInstructions)
 	{
@@ -1061,11 +1092,15 @@ void GDBServer::HandleTrapInstruction(PPCInterpreter_t* hCPU)
 	if (pauseThreads)
 	{
 		cemuLog_logDebug(LogType::Force, "[GDBStub] Got trapped by a breakpoint!");
-		if (m_resumed_context)
+		std::unique_ptr<CommandContext> resumedContext;
 		{
-			// Spin up thread to signal when another GDB stub trap is found
-			ThreadPool::FireAndForget(&waitForBrokenThreads, std::move(m_resumed_context), pauseReason);
+			std::lock_guard runLock(m_runMutex);
+			resumedContext = std::move(m_resumed_context);
 		}
+		// Never hold the breakpoint map lock while suspending a guest thread.
+		breakpointLock.unlock();
+		if (resumedContext)
+			ThreadPool::FireAndForget(&waitForBrokenThreads, std::move(resumedContext), pauseReason);
 
 		breakThreads(GET_THREAD_ID(coreinit::OSGetCurrentThread()));
 		cemuLog_logDebug(LogType::Force, "[GDBStub] Resumed from a breakpoint!");
@@ -1074,6 +1109,9 @@ void GDBServer::HandleTrapInstruction(PPCInterpreter_t* hCPU)
 
 void GDBServer::HandleAccessException(uint64 dr6)
 {
+	std::lock_guard breakpointLock(m_breakpointMutex);
+	if (!m_watch_point)
+		return;
 	bool triggeredWrite = GetBits(dr6, 2, 1);
 	bool triggeredReadWrite = GetBits(dr6, 3, 1);
 
@@ -1103,6 +1141,7 @@ void GDBServer::HandleAccessException(uint64 dr6)
 
 void GDBServer::HandleEntryStop(uint32 entryAddress)
 {
+	std::lock_guard breakpointLock(m_breakpointMutex);
 	this->m_patchedInstructions.try_emplace(entryAddress, entryAddress, BreakpointType::BP_SINGLE, false, "");
 	m_entry_point = entryAddress;
 }

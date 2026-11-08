@@ -52,6 +52,8 @@ DRType _ReadDR6()
 		waitpid(tid, NULL, 0);
 
 		uint64_t dr6 = _GetDR(tid, 6);
+		// Status bits are sticky; clear them before the next memory access.
+		_SetDR(tid, 6, dr6 & ~0xfull);
 
 		if (ptrace(PTRACE_DETACH, tid, nullptr, nullptr))
 			perror("detach");

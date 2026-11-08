@@ -69,6 +69,8 @@ Stepping uses Cemu's software breakpoint mechanism. Self-branching instructions
 and concurrent multicore execution need care; this is not cycle-accurate stepping.
 MSR is unavailable. Hardware memory watchpoints are inherited from upstream,
 limited to one aligned four-byte range on x86, and depend on host ptrace support.
+Use `--force-interpreter` when you need more accurate memory-watchpoint locations;
+the recompiler may report the surrounding dispatch code.
 No graphics, frame-rate, online-idle, or CPU-driver modifications are enabled by
 this fork itself.
 
@@ -80,3 +82,9 @@ python3 -m unittest discover -s tools/python -v
 
 These tests cover the wire protocol and client behavior. They do not replace
 live checks against a compiled Cemu and a running title.
+
+Live checks passed on Linux with MK8 US v81 and the multi-core recompiler:
+register round-trips, executing and restoring a temporary instruction, stepping,
+repeated software breakpoints, 20 consecutive hardware watchpoint hits,
+detach/reconnect, fragmented packets, and invalid requests. Standard GDB also
+connects. Other operating systems have not been tested.

@@ -227,6 +227,8 @@ private:
 	void CMDInsertBreakpoint(std::unique_ptr<CommandContext>& context);
 	void CMDDeleteBreakpoint(std::unique_ptr<CommandContext>& context);
 
+	std::mutex m_breakpointMutex;
+	std::mutex m_runMutex;
 	std::thread m_thread;
 	std::atomic_bool m_resume_startup = false;
 	MPTR m_entry_point{};

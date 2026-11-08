@@ -12,10 +12,15 @@ import json
 import socket
 import struct
 import sys
+import time
 import xml.etree.ElementTree as ET
 
 
 class DebugError(RuntimeError):
+    pass
+
+
+class TitleNotReady(DebugError):
     pass
 
 
@@ -82,8 +87,15 @@ class CemuDebug:
             if "cemu-python-debug+" not in features:
                 raise DebugError("This client needs the cemu-python-debug fork")
             self.running = True
-            self.pause()
-            return self
+            deadline = time.monotonic() + self.timeout
+            while True:
+                try:
+                    self.pause()
+                    return self
+                except TitleNotReady:
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.02)
         except BaseException:
             self.socket.close()
             self.socket = None
@@ -92,8 +104,12 @@ class CemuDebug:
     def __enter__(self):
         return self.connect()
 
-    def __exit__(self, *_):
-        self.close()
+    def __exit__(self, exception_type, exception, traceback):
+        try:
+            self.close()
+        except (OSError, DebugError):
+            if exception_type is None:
+                raise
 
     def _send(self, payload: str):
         if self.socket is None:
@@ -155,6 +171,8 @@ class CemuDebug:
         self.socket.settimeout(self.timeout if timeout is None else timeout)
         try:
             response = self._receive()
+            if response == "E01":
+                raise TitleNotReady("Title has no guest thread yet")
             if not response.startswith(("T", "S", "W", "X")):
                 raise DebugError(f"Expected stop reply, received {response!r}")
             self.stop = response
