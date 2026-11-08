@@ -3251,12 +3251,16 @@ bool PPCRecompiler_generateIntermediateCode(ppcImlGenContext_t& ppcImlGenContext
 	if (!PPCRecompiler_GenerateIML(ppcImlGenContext, boundaryTracker, entryAddresses))
 		return false;
 
-	// set range
-	// todo - support non-continuous functions for the range tracking?
-	ppcRecRange_t recRange;
-	recRange.ppcAddress = ppcRecFunc->ppcAddress;
-	recRange.ppcSize = ppcRecFunc->ppcSize;
-	ppcRecFunc->list_ranges.push_back(recRange);
+	// Branches can pull in disjoint blocks (including graphic-pack code caves).
+	// Track every translated range so a write or breakpoint in any such block
+	// invalidates the compiled function which contains it.
+	for (const auto& range : boundaryTracker.GetRanges())
+	{
+		ppcRecRange_t recRange{};
+		recRange.ppcAddress = range.startAddress;
+		recRange.ppcSize = range.length;
+		ppcRecFunc->list_ranges.push_back(recRange);
+	}
 
 	
 	return true;
