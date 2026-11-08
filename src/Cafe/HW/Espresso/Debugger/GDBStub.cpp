@@ -892,8 +892,8 @@ void GDBServer::CMDWriteRegisters(std::unique_ptr<CommandContext>& context) cons
 
 void GDBServer::CMDReadMemory(std::unique_ptr<CommandContext>& context)
 {
-	sint64 addr = std::stoul(context->GetArgs()[1], nullptr, 16);
-	sint64 length = std::stoul(context->GetArgs()[2], nullptr, 16);
+	uint64 addr = std::stoull(context->GetArgs()[1], nullptr, 16);
+	uint64 length = std::stoull(context->GetArgs()[2], nullptr, 16);
 
 	// todo: handle cross-mmu-range memory requests
 	if (length <= 0 || length > s_maxPacketSize / 2 || addr > UINT32_MAX || length > UINT32_MAX - addr || !memory_isAddressRangeAccessible(addr, length))
@@ -901,13 +901,13 @@ void GDBServer::CMDReadMemory(std::unique_ptr<CommandContext>& context)
 
 	std::string memoryRepr;
 	uint8* values = memory_getPointerFromVirtualOffset(addr);
-	for (sint64 i = 0; i < length; i++)
+	for (uint64 i = 0; i < length; i++)
 	{
 		memoryRepr += fmt::format("{:02X}", values[i]);
 	}
 
 	// A read may begin inside an instruction; return all original bytes covered by breakpoints.
-	for (sint64 i = 0; i < length; ++i)
+	for (uint64 i = 0; i < length; ++i)
 	{
 		auto bp = m_patchedInstructions.find(static_cast<MPTR>((addr + i) & ~3ull));
 		if (bp != m_patchedInstructions.end())
@@ -922,8 +922,8 @@ void GDBServer::CMDReadMemory(std::unique_ptr<CommandContext>& context)
 
 void GDBServer::CMDWriteMemory(std::unique_ptr<CommandContext>& context)
 {
-	sint64 addr = std::stoul(context->GetArgs()[1], nullptr, 16);
-	sint64 length = std::stoul(context->GetArgs()[2], nullptr, 16);
+	uint64 addr = std::stoull(context->GetArgs()[1], nullptr, 16);
+	uint64 length = std::stoull(context->GetArgs()[2], nullptr, 16);
 	const auto& source = context->GetArgs()[3];
 	if (length <= 0 || length > s_maxPacketSize / 2 || source.size() != length * 2)
 		return context->QueueResponse(RESPONSE_ERROR);
@@ -933,7 +933,7 @@ void GDBServer::CMDWriteMemory(std::unique_ptr<CommandContext>& context)
 		return context->QueueResponse(RESPONSE_ERROR);
 
 	uint8* values = memory_getPointerFromVirtualOffset(addr);
-	for (sint64 i = 0; i < length; i++)
+	for (uint64 i = 0; i < length; i++)
 	{
 		uint8 hexValue;
 		const std::from_chars_result result = std::from_chars(source.data() + (i * 2), (source.data() + (i * 2) + 2), hexValue, 16);
@@ -953,7 +953,8 @@ void GDBServer::CMDWriteMemory(std::unique_ptr<CommandContext>& context)
 			values[i] = hexValue;
 		}
 	}
-	PPCRecompiler_invalidateRange(static_cast<uint32>(addr), static_cast<uint32>(std::min<sint64>(addr + length, PPC_REC_CODE_AREA_END)));
+	if (addr < PPC_REC_CODE_AREA_END)
+		PPCRecompiler_invalidateRange(static_cast<uint32>(addr), static_cast<uint32>(std::min<uint64>(addr + length, PPC_REC_CODE_AREA_END)));
 	return context->QueueResponse(RESPONSE_OK);
 }
 
