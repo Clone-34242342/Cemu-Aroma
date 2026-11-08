@@ -129,6 +129,21 @@ class ClientTests(unittest.TestCase):
             self.assertIn("swbreak", client.step())
             client.breakpoint(0x2000000, remove=True)
 
+    def test_breakpoint_stop_races_interrupt_cleanup(self):
+        def two_stops(connection):
+            connection.sendall(b"+" + _frame(b"T05thread:1000;swbreak:;")
+                               + _frame(b"T02thread:1000;"))
+        commands = [("Z0,2000000,4", "OK"), ("vCont;c", None),
+                    ("interrupt", two_stops), ("Hg1000", "OK"),
+                    ("p40", "02000000"), ("z0,2000000,4", "OK")]
+        with session(commands) as client:
+            client.breakpoint(0x2000000)
+            client.resume()
+            client.pause()
+            self.assertFalse(client.running)
+            self.assertEqual(client.register("pc"), 0x02000000)
+            client.breakpoint(0x2000000, remove=True)
+
     def test_checksum_retransmit(self):
         def damaged(connection):
             connection.sendall(b"+$01020304#00")

@@ -156,6 +156,21 @@ class CemuDebug:
     def _request(self, payload: str, *, ok: bool = False) -> str:
         self._send(payload)
         response = self._receive()
+        # A breakpoint can race Ctrl-C after an interrupted wait_stop(). Both
+        # stop replies may precede the response to this ordinary RSP request.
+        # Consume those notifications so an Hg/OK exchange stays synchronized.
+        for _ in range(16):
+            if len(response) < 3 or response[0] not in "TS":
+                break
+            try:
+                int(response[1:3], 16)
+            except ValueError:
+                break
+            self.stop = response
+            self.running = False
+            response = self._receive()
+        else:
+            raise DebugError("Too many stop notifications before command response")
         if (len(response) == 3 and response.startswith("E")) or (ok and response != "OK"):
             raise DebugError(f"{payload[:40]}: {response or 'unsupported'}")
         return response

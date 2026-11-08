@@ -86,7 +86,8 @@ live checks against a compiled Cemu and a running title.
 Live checks passed on Linux with MK8 US v81 and the multi-core recompiler:
 register round-trips, executing and restoring a temporary instruction, stepping,
 repeated software breakpoints, 20 consecutive hardware watchpoint hits,
-detach/reconnect, fragmented packets, and invalid requests. Standard GDB also
+detach/reconnect, interrupting with a breakpoint stop already pending, fragmented
+packets, and invalid requests. Standard GDB also
 connects. Alternating native code hooks were checked against the executing
 physics timestep. A core can finish an already-running translated block after a
 write, so wait for the changed code to execute before taking measurements.
