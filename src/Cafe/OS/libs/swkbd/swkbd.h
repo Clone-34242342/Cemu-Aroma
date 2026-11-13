@@ -7,4 +7,5 @@ void swkbd_keyInput(uint32 keyCode);
 namespace swkbd
 {
 	COSModule* GetModule();
+	std::string GetSubmittedTextAsJson();
 }

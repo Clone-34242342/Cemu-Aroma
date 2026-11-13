@@ -642,6 +642,15 @@ namespace sysapp
 		return coreinit::OSRestartGame(argc, argv);
 	}
 
+	void _SYSLaunchTitleWithStdArgsInNoSplash(uint64 titleId, sysStandardArguments_t* args)
+	{
+		coreinit::__OSClearCopyData();
+		if (args && args->argStr)
+			_SYSSerializeStandardArgsIn(args);
+		_SYSAppendCallerInfo();
+		coreinit::ScheduleTitleLaunch(titleId);
+	}
+
 	struct EManualArgs
 	{
 		sysStandardArguments_t stdArgs;
@@ -668,6 +677,7 @@ namespace sysapp
 		cafeExportRegisterFunc(SYSClearSysArgs, "sysapp", "SYSClearSysArgs", LogType::Placeholder);
 		cafeExportRegisterFunc(_SYSLaunchTitleByPathFromLauncher, "sysapp", "_SYSLaunchTitleByPathFromLauncher", LogType::Placeholder);
 		cafeExportRegisterFunc(SYSRelaunchTitle, "sysapp", "SYSRelaunchTitle", LogType::Placeholder);
+		cafeExportRegister("sysapp", _SYSLaunchTitleWithStdArgsInNoSplash, LogType::Placeholder);
 		cafeExportRegister("sysapp", _SYSSwitchToEManual, LogType::Placeholder);
 		cafeExportRegister("sysapp", SYSSwitchToEManual, LogType::Placeholder);
 	}

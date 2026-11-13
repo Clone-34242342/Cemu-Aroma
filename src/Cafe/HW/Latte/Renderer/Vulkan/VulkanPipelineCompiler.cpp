@@ -24,6 +24,10 @@ RendererShaderVk* rectsEmulationGS_generate(LatteDecompilerShader* vertexShader,
 	gsSrc.append("layout(triangle_strip) out;\r\n");
 	gsSrc.append("layout(max_vertices = 4) out;\r\n");
 
+	// Rectangle draws consume only the position emitted by the vertex stage.
+	gsSrc.append("in gl_PerVertex { vec4 gl_Position; } gl_in[];\r\n");
+	gsSrc.append("out gl_PerVertex { vec4 gl_Position; };\r\n");
+
 	// inputs & outputs
 	auto parameterMask = vertexShader->outputParameterMask;
 	for (sint32 f = 0; f < 2; f++)

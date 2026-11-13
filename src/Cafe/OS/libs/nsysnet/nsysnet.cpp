@@ -1501,7 +1501,7 @@ void nsysnetExport_getaddrinfo(PPCInterpreter_t* hCPU)
 		hint.ai_flags = 0;
 		hint.ai_protocol = 0;
 	}
-	struct addrinfo* result;
+	struct addrinfo* result = nullptr;
 	sint32 hr = getaddrinfo(nodeName, serviceName, &hint, &result);
 	if (hr != 0)
 	{
@@ -1521,6 +1521,7 @@ void nsysnetExport_getaddrinfo(PPCInterpreter_t* hCPU)
 	}
 	else
 	{
+		stdx::scope_exit releaseHostResults([&] { freeaddrinfo(result); });
 		// count how many results there are
 		sint32 resultCount = 0;
 		struct addrinfo* currentAddrInfo = result;
@@ -1534,7 +1535,12 @@ void nsysnetExport_getaddrinfo(PPCInterpreter_t* hCPU)
 			cemu_assert_debug(false);
 		}
 		// allocate entries
-		MPTR addrInfoMPTR = coreinit_allocFromSysArea(sizeof(wu_addrinfo)*resultCount + sizeof(wu_sockaddr)*resultCount, 4);
+		MPTR addrInfoMPTR = OSAllocFromSystem((sizeof(wu_addrinfo) + sizeof(wu_sockaddr)) * resultCount, 4);
+		if (!addrInfoMPTR)
+		{
+			osLib_returnFromFunction(hCPU, 1);
+			return;
+		}
 		MPTR addrInfoSockAddrMPTR = addrInfoMPTR + sizeof(wu_addrinfo)*resultCount;
 		wu_addrinfo* wuAddrInfo = (wu_addrinfo*)memory_getPointerFromVirtualOffset(addrInfoMPTR);
 		// fill entries
@@ -1579,13 +1585,27 @@ void nsysnetExport_getaddrinfo(PPCInterpreter_t* hCPU)
 			currentAddrInfo = currentAddrInfo->ai_next;
 		}
 		if (entryIndex == 0)
-			assert_dbg();
+		{
+			OSFreeToSystem(addrInfoMPTR);
+			addrInfoMPTR = MPTR_NULL;
+			r = 1;
+		}
 		// set results
 		memory_writeU32(results, addrInfoMPTR);
 	}
 
 	osLib_returnFromFunction(hCPU, r);
 }
+
+void nsysnetExport_freeaddrinfo(PPCInterpreter_t* hCPU)
+{
+	const auto address = hCPU->gpr[3];
+	if (address)
+		OSFreeToSystem(address);
+	cemuLog_log(LogType::Socket, "freeaddrinfo(0x{:08x})", address);
+	osLib_returnFromFunction(hCPU, 0);
+}
+
 
 void nsysnetExport_recvfrom(PPCInterpreter_t* hCPU)
 {
@@ -2307,6 +2327,7 @@ namespace nsysnet
 			osLib_addFunction("nsysnet", "gethostbyname", nsysnetExport_gethostbyname);
 			osLib_addFunction("nsysnet", "gethostbyaddr", nsysnetExport_gethostbyaddr);
 			osLib_addFunction("nsysnet", "getaddrinfo", nsysnetExport_getaddrinfo);
+			osLib_addFunction("nsysnet", "freeaddrinfo", nsysnetExport_freeaddrinfo);
 
 			osLib_addFunction("nsysnet", "socketlasterr", nsysnetExport_socketlasterr);
 

@@ -2,6 +2,7 @@
 #include "Cafe/OS/libs/coreinit/coreinit_FS.h"
 #include "Cafe/OS/libs/gx2/GX2.h"
 #include "Cafe/HW/Latte/Renderer/Renderer.h"
+#include "Cafe/OS/libs/swkbd/swkbd.h"
 
 #include <imgui.h>
 #include "imgui/imgui_extension.h"
@@ -75,7 +76,9 @@ typedef struct
 	uint16be formStringBufferBE[SWKBD_FORM_STRING_MAX_LENGTH];
 	bool isActive; // set when SwkbdAppearInputForm() is called
 	//bool isDisplayed; // set when keyboard is rendering
-	bool decideButtonWasPressed; // set to false when keyboard appears, and set to true when enter is pressed. Remains on true after the keyboard is disappeared (todo: Investigate how this really works)
+	bool decideButtonWasPressed; // Pending OK for the currently visible keyboard.
+	uint8 closeFrames; // Guest Calc calls before the keyboard reaches the hidden state.
+	bool submittedTextAvailable; // Keep the submitted buffer readable after dismissal.
 	// keyboard only mode (no input form)
 	bool keyboardOnlyMode;
 	SwkbdKeyboardArg_t keyboardArg;
@@ -87,34 +90,24 @@ typedef struct
 	bool cancelState;
 }swkbdInternalState_t;
 
-sint32 isNeedCalcSubThreadFont = 0;
-sint32 isNeedCalcSubThreadPredict = 0;
-
 CafeStaticVar<swkbdInternalState_t> swkbdInternalState{s_swkbdStaticData};
 
 void SwkbdCreate(uint8* workMemory, uint32 regionType, uint32 unk, coreinit::FSClient_t* fsClient)
 {
 	memset(swkbdInternalState.GetPtr(), 0, sizeof(swkbdInternalState_t));
 	coreinit::OSSleepTicks(ESPRESSO_TIMER_CLOCK); // simulate this function taking a bit of time to run. MH3U/MH3G requires this to not softlock
-	// pretend that there is some work to do
-	isNeedCalcSubThreadFont = 3;
-	isNeedCalcSubThreadPredict = 3;
 }
 
 uint32 SwkbdGetStateKeyboard()
 {
-	uint32 r = SWKBD_STATE_BLANK;
-	if( swkbdInternalState->isActive )
-		r = SWKBD_STATE_DISPLAYED;
-	return r;
+	if (swkbdInternalState->closeFrames)
+		return SWKBD_STATE_DISAPPEARING;
+	return swkbdInternalState->isActive ? SWKBD_STATE_DISPLAYED : SWKBD_STATE_BLANK;
 }
 
 uint32 SwkbdGetStateInputForm()
 {
-	uint32 r = SWKBD_STATE_BLANK;
-	if( swkbdInternalState->isActive )
-		r = SWKBD_STATE_DISPLAYED;
-	return r;
+	return swkbdInternalState->keyboardOnlyMode ? SWKBD_STATE_BLANK : SwkbdGetStateKeyboard();
 }
 
 //ReceiverArg:
@@ -193,6 +186,8 @@ uint32 SwkbdAppearInputForm(const swkbdAppearArg_t* appearArg)
 	swkbdInternalState->formStringLength = 0;
 	swkbdInternalState->isActive = true;
 	swkbdInternalState->decideButtonWasPressed = false;
+	swkbdInternalState->submittedTextAvailable = false;
+	swkbdInternalState->closeFrames = 0;
 	swkbdInternalState->keyboardOnlyMode = false;
 
 	// setup max text length
@@ -236,24 +231,32 @@ uint32 SwkbdAppearKeyboard(const SwkbdKeyboardArg_t* keyboardArg)
 	swkbdInternalState->isActive = true;
 	swkbdInternalState->keyboardOnlyMode = true;
 	swkbdInternalState->decideButtonWasPressed = false;
+	swkbdInternalState->submittedTextAvailable = false;
+	swkbdInternalState->closeFrames = 0;
 	swkbdInternalState->formStringBuffer[0] = '\0';
 	swkbdInternalState->formStringLength = 0;
 	swkbdInternalState->keyboardArg = *keyboardArg;
 	return 1;
 }
 
+static uint32 SwkbdStartDisappearing()
+{
+	if (!swkbdInternalState->isActive)
+		return 0;
+	swkbdInternalState->isActive = false;
+	swkbdInternalState->decideButtonWasPressed = false;
+	swkbdInternalState->closeFrames = 8;
+	return 1;
+}
+
 uint32 SwkbdDisappearInputForm()
 {
-	debug_printf("SwkbdDisappearInputForm__3RplFv\n");
-	swkbdInternalState->isActive = false;
-	return 1;
+	return SwkbdStartDisappearing();
 }
 
 uint32 SwkbdDisappearKeyboard()
 {
-	debug_printf("SwkbdDisappearKeyboard__3RplFv\n");
-	swkbdInternalState->isActive = false;
-	return 1;
+	return SwkbdStartDisappearing();
 }
 
 uint16be* SwkbdGetInputFormString()
@@ -265,11 +268,24 @@ uint16be* SwkbdGetInputFormString()
 	return swkbdInternalState->formStringBufferBE;
 }
 
-uint32 SwkbdIsDecideOkButton(uint8*)
+uint32 SwkbdIsDecideOkButton(uint8* outIsSelected)
 {
-	if (swkbdInternalState->decideButtonWasPressed)
-		return 1;
-	return 0;
+	const bool pressed = swkbdInternalState->decideButtonWasPressed;
+	if (outIsSelected)
+		*outIsSelected = false;
+	return pressed;
+}
+
+std::string swkbd::GetSubmittedTextAsJson()
+{
+	if (!swkbdInternalState || !swkbdInternalState->submittedTextAvailable)
+		return "null";
+
+	std::string json = "\"";
+	for (sint32 index = 0; index < swkbdInternalState->formStringLength; ++index)
+		fmt::format_to(std::back_inserter(json), "\\u{:04x}", static_cast<uint16>(swkbdInternalState->formStringBuffer[index]));
+	json += '"';
+	return json;
 }
 
 typedef struct  
@@ -365,33 +381,27 @@ uint32 SwkbdInitLearnDic(SwkbdLearnDic* dictionary)
 
 bool SwkbdIsNeedCalcSubThreadFont()
 {
-	return isNeedCalcSubThreadFont > 0;
+	// Cemu does not queue guest font calculation work.
+	return false;
 }
 
 bool SwkbdIsNeedCalcSubThreadPredict()
 {
-	return isNeedCalcSubThreadPredict > 0;
+	return false;
 }
 
 void SwkbdCalcSubThreadFont()
 {
-	if (isNeedCalcSubThreadFont == 0)
-		return;
-	isNeedCalcSubThreadFont--;
-	coreinit::OSSleepTicks(ESPRESSO_TIMER_CLOCK / 200); // simulate 5ms of working time
 }
 
 void SwkbdCalcSubThreadPredict()
 {
-	if (isNeedCalcSubThreadPredict == 0)
-		return;
-	isNeedCalcSubThreadPredict--;
-	coreinit::OSSleepTicks(ESPRESSO_TIMER_CLOCK / 200); // simulate 5ms of working time
 }
 
 void SwkbdCalc(void* controllerInfo)
 {
-	// no op for now
+	if (swkbdInternalState->closeFrames)
+		--swkbdInternalState->closeFrames;
 }
 
 void swkbd_keyInput(uint32 keyCode);
@@ -563,7 +573,8 @@ bool swkbd_hasKeyboardInputHook()
 
 void swkbd_finishInput()
 {
-	swkbdInternalState->decideButtonWasPressed = true; // currently we always accept the input
+	swkbdInternalState->decideButtonWasPressed = true;
+	swkbdInternalState->submittedTextAvailable = true;
 }
 
 typedef struct  
@@ -685,8 +696,6 @@ namespace swkbd
 		void RPLMapped() override
 		{
 			s_swkbdStaticData.Allocate();
-			isNeedCalcSubThreadFont = 0;
-			isNeedCalcSubThreadPredict = 0;
 			cafeExportRegisterFunc(SwkbdCreate, "swkbd", "SwkbdCreate__3RplFPUcQ3_2nn5swkbd10RegionTypeUiP8FSClient", LogType::SWKBD);
 			cafeExportRegisterFunc(SwkbdCalc, "swkbd", "SwkbdCalc__3RplFRCQ3_2nn5swkbd14ControllerInfo", LogType::SWKBD);
 			cafeExportRegisterFunc(SwkbdGetStateKeyboard, "swkbd", "SwkbdGetStateKeyboard__3RplFv", LogType::SWKBD);

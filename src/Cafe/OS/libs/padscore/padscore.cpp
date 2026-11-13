@@ -54,6 +54,9 @@ namespace padscore
 	uint32 g_kpad_ringbuffer_length = 0;
 	bool g_wpad_callback_by_kpad = false;
 
+	std::atomic_bool g_urccEnabled{true};
+	std::atomic_bool g_kpadReadsEnabled{true};
+
 	WPADState_t g_wpad_state = kWPADStateMaster;
 
 	struct {
@@ -75,6 +78,24 @@ namespace padscore
 
 		int max_controllers = kWPADMaxControllers; // max bt controllers?
 	} g_padscore;
+	static auto GetController(uint32 channel)
+	{
+		auto controller = InputManager::instance().get_wpad_controller(channel);
+		if (controller && controller->get_device_type() == kWAPDevURCC && !g_urccEnabled.load())
+			controller.reset();
+		return controller;
+	}
+
+	void WPADEnableURCC(uint32 enable)
+	{
+		g_urccEnabled.store(enable != 0);
+	}
+
+	uint32 WPADIsEnabledURC()
+	{
+		return g_urccEnabled.load();
+	}
+
 }
 
 
@@ -100,7 +121,7 @@ void padscoreExport_WPADProbe(PPCInterpreter_t* hCPU)
 
 	cemuLog_log(LogType::InputAPI, "WPADProbe({})", channel);
 
-	if(const auto controller = InputManager::instance().get_wpad_controller(channel))
+	if(const auto controller = padscore::GetController(channel))
 	{
 		if(type)
 			*type = controller->get_device_type();
@@ -140,7 +161,7 @@ void padscoreExport_WPADGetInfoAsync(PPCInterpreter_t* hCPU)
 
 	if (channel < InputManager::kMaxWPADControllers)
 	{
-		if (const auto controller = InputManager::instance().get_wpad_controller(channel))
+		if (const auto controller = padscore::GetController(channel))
 		{
 			wpadInfo->dpd = FALSE;
 			wpadInfo->speaker = FALSE;
@@ -176,7 +197,7 @@ void padscoreExport_WPADRead(PPCInterpreter_t* hCPU)
 
 	if (channel < InputManager::kMaxWPADControllers)
 	{
-		if(const auto controller = InputManager::instance().get_wpad_controller(channel) )
+		if(const auto controller = padscore::GetController(channel) )
 		{
 			controller->WPADRead(wpadStatus);
 		}
@@ -196,7 +217,7 @@ void padscoreExport_WPADSetDataFormat(PPCInterpreter_t* hCPU)
 
 	if (channel < InputManager::kMaxWPADControllers)
 	{
-		if (const auto controller = InputManager::instance().get_wpad_controller(channel))
+		if (const auto controller = padscore::GetController(channel))
 			controller->set_data_format((WPADDataFormat)fmt);
 	}
 
@@ -211,7 +232,7 @@ void padscoreExport_WPADGetDataFormat(PPCInterpreter_t* hCPU)
 	sint32 dataFormat = kDataFormat_CORE;
 	if (channel < InputManager::kMaxWPADControllers)
 	{
-		if (const auto controller = InputManager::instance().get_wpad_controller(channel))
+		if (const auto controller = padscore::GetController(channel))
 			dataFormat = controller->get_data_format();
 	}
 	else
@@ -230,7 +251,7 @@ void padscoreExport_WPADGetInfo(PPCInterpreter_t* hCPU)
 
 	if (channel < InputManager::kMaxWPADControllers)
 	{
-		if (const auto controller = InputManager::instance().get_wpad_controller(channel))
+		if (const auto controller = padscore::GetController(channel))
 		{
 			wpadInfo->dpd = FALSE;
 			wpadInfo->speaker = FALSE;
@@ -267,7 +288,7 @@ void padscoreExport_WPADControlMotor(PPCInterpreter_t* hCPU)
 	
 	if (channel < InputManager::kMaxWPADControllers)
 	{
-		if (const auto controller = InputManager::instance().get_wpad_controller(channel))
+		if (const auto controller = padscore::GetController(channel))
 		{
 			if( command == kStartRumble )
 				controller->start_rumble();
@@ -299,7 +320,7 @@ void padscoreExport_KPADGetUnifiedWpadStatus(PPCInterpreter_t* hCPU)
 	{
 		memset(status, 0x00, sizeof(KPADUnifiedWpadStatus_t) * count);
 
-		if (const auto controller = InputManager::instance().get_wpad_controller(channel))
+		if (const auto controller = padscore::GetController(channel))
 		{
 			switch (controller->get_data_format())
 			{
@@ -372,7 +393,7 @@ void padscoreExport_WPADControlDpd(PPCInterpreter_t* hCPU)
 
 	if (channel < InputManager::kMaxWPADControllers)
 	{
-		if (const auto controller = InputManager::instance().get_wpad_controller(channel))
+		if (const auto controller = padscore::GetController(channel))
 		{
 			padscore::g_padscore.controller_data[channel].dpd_callback = callback;
 			if (callback)
@@ -427,7 +448,6 @@ void padscoreExport_KPADSetConnectCallback(PPCInterpreter_t* hCPU)
 }
 
 uint64 g_kpadLastRead[InputManager::kMaxWPADControllers] = {0};
-bool g_kpadIsInited = true;
 
 sint32 _KPADRead(uint32 channel, KPADStatus_t* samplingBufs, uint32 length, betype<KPAD_ERROR>* errResult)
 {
@@ -438,7 +458,7 @@ sint32 _KPADRead(uint32 channel, KPADStatus_t* samplingBufs, uint32 length, bety
 		return 0;
 	}
 	
-	if (g_kpadIsInited == false)
+	if (!padscore::g_kpadReadsEnabled.load())
 	{
 		if (errResult)
 			*errResult = KPAD_ERROR::NOT_INITIALIZED;
@@ -446,7 +466,7 @@ sint32 _KPADRead(uint32 channel, KPADStatus_t* samplingBufs, uint32 length, bety
 		return 0;
 	}
 
-	const auto controller = InputManager::instance().get_wpad_controller(channel);
+	const auto controller = padscore::GetController(channel);
 	if (!controller)
 	{
 		if (errResult)
@@ -524,7 +544,7 @@ namespace padscore
 		cemuLog_log(LogType::InputAPI, "KPADEnableDPD({})", channel);
 		cemu_assert_debug(0 <= channel && channel < InputManager::kMaxWPADControllers);
 
-		if(const auto controller = InputManager::instance().get_wpad_controller(channel))
+		if(const auto controller = padscore::GetController(channel))
 		{
 			if (controller->get_data_format() != kDataFormat_FREESTYLE && controller->get_data_format() != 0x1F)
 				g_padscore.controller_data[channel].dpd_enabled = true;
@@ -555,6 +575,15 @@ namespace padscore
 		g_kpad_ringbuffer = ring_buffer;
 		g_kpad_ringbuffer_length = length;
 		g_padscore.kpad_initialized = true;
+		g_kpadReadsEnabled.store(true);
+	}
+
+	void KPADShutdown()
+	{
+		g_kpadReadsEnabled.store(false);
+		g_kpad_ringbuffer = nullptr;
+		g_kpad_ringbuffer_length = 0;
+		g_padscore.kpad_initialized = false;
 	}
 
 	void export_KPADInit(PPCInterpreter_t* hCPU)
@@ -662,7 +691,7 @@ namespace padscore
 		if (index >= kKPADMaxControllers)
 			return WPADStatus::NoController;
 
-		const auto controller = InputManager::instance().get_wpad_controller(index);
+		const auto controller = padscore::GetController(index);
 		*attached = controller && controller->is_mpls_attached();
 
 		if (callback)
@@ -693,7 +722,6 @@ namespace padscore
 
 	void TickFunction(PPCInterpreter_t* hCPU)
 	{
-		auto& instance = InputManager::instance();
 		// test for connected/disconnected controllers
 		for (auto i = 0; i < InputManager::kMaxWPADControllers; ++i)
 		{
@@ -707,7 +735,7 @@ namespace padscore
 					continue;
 				}
 
-				if (const auto controller = instance.get_wpad_controller(i))
+				if (const auto controller = GetController(i))
 				{
 					if (controller->m_status == WPADController::ConnectCallbackStatus::ReportDisconnect || controller->was_home_button_down()) // fixed!
 					{
@@ -732,7 +760,7 @@ namespace padscore
 		{
 			if (g_padscore.controller_data[i].extension_callback) 
 			{
-				if (const auto controller = instance.get_wpad_controller(i))
+				if (const auto controller = GetController(i))
 				{
 					if (controller->m_extension_status == WPADController::ConnectCallbackStatus::ReportConnect)
 					{
@@ -749,7 +777,7 @@ namespace padscore
 		{
 			if (g_padscore.controller_data[i].sampling_callback)
 			{
-				if (const auto controller = instance.get_wpad_controller(i))
+				if (const auto controller = GetController(i))
 				{
 					cemuLog_log(LogType::InputAPI, "Calling WPADsamplingCallback({})", i);
 					PPCCoreCallback(g_padscore.controller_data[i].sampling_callback, i);
@@ -791,6 +819,14 @@ namespace padscore
 		void RPLMapped() override
 		{
 			s_padscoreStaticData.Allocate();
+			KPADShutdown();
+			// Preserve Cemu's implicit read support for titles without KPADInit.
+			g_kpadReadsEnabled.store(true);
+			g_urccEnabled.store(true);
+			std::ranges::fill(g_kpadLastRead, 0);
+			cafeExportRegister("padscore", KPADShutdown, LogType::InputAPI);
+			cafeExportRegister("padscore", WPADEnableURCC, LogType::InputAPI);
+			cafeExportRegister("padscore", WPADIsEnabledURC, LogType::InputAPI);
 			cafeExportRegister("padscore", WPADIsMplsAttached, LogType::InputAPI);
 			cafeExportRegister("padscore", WPADGetAccGravityUnit, LogType::InputAPI);
 

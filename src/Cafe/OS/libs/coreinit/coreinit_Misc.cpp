@@ -1,3 +1,4 @@
+#include "Cafe/Aroma/WupsLoader.h"
 #include "Cafe/OS/common/OSCommon.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Misc.h"
 #include "Cafe/OS/libs/coreinit/coreinit_MessageQueue.h"
@@ -697,7 +698,12 @@ namespace coreinit
 	void OSLauncherThread(uint64 titleId)
 	{
 		CafeSystem::ShutdownTitle();
-		CafeSystem::PrepareForegroundTitle(titleId);
+		if (CafeSystem::PrepareForegroundTitle(titleId) != CafeSystem::PREPARE_STATUS_CODE::SUCCESS)
+		{
+			cemuLog_log(LogType::Force, "Could not prepare requested title {:016x}", titleId);
+			CafeSystem::NotifyPPCProcessExit(-1);
+			return;
+		}
 		CafeSystem::RequestRecreateCanvas();
 		CafeSystem::LaunchForegroundTitle();
 	}
@@ -738,6 +744,8 @@ namespace coreinit
 		for(uint32 i=0; i<argc; i++)
 			argArray.emplace_back(argv[i]);
 		CafeSystem::SetOverrideArgs(argArray);
+		if (!Aroma::EndPluginForGuestExit())
+			return 0;
 		// spawn launcher thread (this current thread will be destroyed during relaunch)
 		std::thread launcherThread(OSLauncherThread, titleId);
 		launcherThread.detach();
@@ -798,6 +806,14 @@ namespace coreinit
 
 	bool s_transitionToBackground = false;
 	bool s_transitionToForeground = false;
+	std::atomic<uint64> s_scheduledTitle{};
+	std::atomic_bool s_sendLaunchExitMessage{};
+
+	void ScheduleTitleLaunch(uint64 titleId)
+	{
+		s_scheduledTitle.store(titleId);
+		s_sendLaunchExitMessage.store(titleId != 0);
+	}
 
 	void StartBackgroundForegroundTransition()
 	{
@@ -811,6 +827,14 @@ namespace coreinit
 		if(!OSIsInterruptEnabled())
 			return;
 		cemu_assert_debug(!__OSHasSchedulerLock());
+		if (s_sendLaunchExitMessage.exchange(false))
+		{
+			OSMessage msg{};
+			msg.data0 = stdx::to_underlying(SysMessageId::MsgExit);
+			if (!OSSendMessage(OSGetSystemMessageQueue(), &msg, 0))
+				s_sendLaunchExitMessage.store(true);
+			return;
+		}
 		// normally syscall 0x2E is used to get the next message
 		// for now we just have some preliminary logic here to allow a fake transition to background & foreground
 		if(s_transitionToBackground)
@@ -859,9 +883,16 @@ namespace coreinit
 
 	void __PPCExit(sint32 status)
 	{
+		if (!Aroma::EndPluginForGuestExit())
+			return;
 		// spawn shutdown thread (the current thread has to be destroyed as part of the shutdown process)
-		std::thread shutdownThread(OSShutdownThread, status);
-		shutdownThread.detach();
+		if (const auto nextTitle = s_scheduledTitle.exchange(0))
+		{
+			CafeSystem::SetOverrideArgs({});
+			std::thread(OSLauncherThread, nextTitle).detach();
+		}
+		else
+			std::thread(OSShutdownThread, status).detach();
 		// suspend this thread
 		coreinit::OSSuspendThread(coreinit::OSGetCurrentThread());
 	}
@@ -884,6 +915,8 @@ namespace coreinit
 		s_forwardConsoleLogs = LaunchSettings::ForwardConsoleLogging();
 		s_transitionToBackground = false;
 		s_transitionToForeground = false;
+		s_scheduledTitle.store(0);
+		s_sendLaunchExitMessage.store(false);
 
 		cafeExportRegister("coreinit", __os_snprintf, LogType::Placeholder);
 

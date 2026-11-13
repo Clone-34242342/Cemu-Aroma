@@ -224,6 +224,14 @@ namespace vpad
 		ppcDefineParamPtr(error, uint32be, 3);
 		cemuLog_log(LogType::InputAPI, "VPADRead({}, _, {})", channel, length);*/
 	
+		const auto controller = InputManager::instance().get_vpad_controller(channel);
+		if (!controller && channel != 0)
+		{
+			if (error)
+				*error = VPAD_READ_ERR_NO_CONTROLLER;
+			return 0;
+		}
+
 		// default init which should be always set
 		memset(status, 0x00, sizeof(VPADStatus_t));
 
@@ -236,18 +244,9 @@ namespace vpad
 		status->tpProcessed1.validity = VPAD_TP_VALIDITY_INVALID_XY;
 		status->tpProcessed2.validity = VPAD_TP_VALIDITY_INVALID_XY;
 
-		const auto controller = InputManager::instance().get_vpad_controller(channel);
 		if (!controller)
 		{
-			// most games expect the Wii U GamePad to be connected, so even if the user has not set it up we should still return empty samples for channel 0
-			if(channel != 0)
-			{
-				if (error)
-					*error = VPAD_READ_ERR_NO_CONTROLLER;
-				if (length > 0)
-					status->vpadErr = -1;
-				return 0;
-			}
+			// Channel zero supplies a neutral sample even without a mapping.
 			if (error)
 				*error = VPAD_READ_ERR_NONE;
 			return 1;
@@ -1153,6 +1152,16 @@ namespace vpad
 		coreinit::OSSetPeriodicAlarm(&g_vpad.alarm, start_tick, period_tick, handler);
 	}
 
+	void VPADSetTVMenuInvalid(sint32, uint32)
+	{
+		// The virtual GamePad has no TV remote overlay to suppress.
+	}
+
+	uint32 VPADGetTVMenuStatus(sint32)
+	{
+		return 0;
+	}
+
 	void SetChannelDefaults(sint32 channel)
 	{
 		g_vpad.controller_data[channel] = {};
@@ -1204,6 +1213,8 @@ namespace vpad
 			cafeExportRegister("vpad", VPADSetBtnRepeat, LogType::InputAPI);
 			cafeExportRegister("vpad", VPADSetSamplingCallback, LogType::InputAPI);
 			cafeExportRegister("vpad", VPADRead, LogType::InputAPI);
+			cafeExportRegister("vpad", VPADSetTVMenuInvalid, LogType::InputAPI);
+			cafeExportRegister("vpad", VPADGetTVMenuStatus, LogType::InputAPI);
 
 			osLib_addFunction("vpad", "VPADGetAccParam", vpadExport_VPADGetAccParam);
 			osLib_addFunction("vpad", "VPADSetAccParam", vpadExport_VPADSetAccParam);

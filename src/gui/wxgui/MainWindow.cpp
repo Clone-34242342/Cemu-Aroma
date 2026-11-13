@@ -2195,9 +2195,16 @@ void MainWindow::RecreateMenu()
 	else
 	{
 #ifdef CEMU_DEBUG_ASSERT
-		m_fileMenu->Append(MAINFRAME_MENU_ID_FILE_END_EMULATION, _("Close game"));
-		m_fileMenuSeparator1 = m_fileMenu->AppendSeparator();
+		const bool canCloseGame = true;
+#else
+		const bool canCloseGame = !LaunchSettings::AromaPlugins().empty() ||
+			LaunchSettings::AromaModuleDirectory().has_value();
 #endif
+		if (canCloseGame)
+		{
+			m_fileMenu->Append(MAINFRAME_MENU_ID_FILE_END_EMULATION, _("Close game"));
+			m_fileMenuSeparator1 = m_fileMenu->AppendSeparator();
+		}
 	}
 
 	m_fileMenu->Append(MAINFRAME_MENU_ID_FILE_OPEN_CEMU_FOLDER, _("Open Cemu folder"));

@@ -1,4 +1,5 @@
 #include "COSModule.h"
+#include "Cafe/Aroma/ContentRedirection.h"
 
 #include "Cafe/OS/libs/coreinit/coreinit.h"
 #include "Cafe/OS/libs/zlib125/zlib125.h"
@@ -84,6 +85,8 @@ std::span<COSModule*> GetCOSModules()
 		nn::idbe::GetModule(),
 		nlibnss::GetModule(),
 		nlibcurl::GetModule(),
+		nlibcurl::GetAromaModule(),
+		Aroma::ContentRedirection::GetModule(),
 		sysapp::GetModule(),
 		nsyshid::GetModule(),
 		nsyskbd::GetModule(),
@@ -91,6 +94,7 @@ std::span<COSModule*> GetCOSModules()
 		camera::GetModule(),
 		proc_ui::GetModule(),
 		avm::GetModule(),
+		avm::GetTVEModule(),
 		drmapp::GetModule(),
 		TCL::GetModule(),
 		nn::cmpt::GetModule(),

@@ -1,4 +1,5 @@
 #include <zlib.h>
+#include "config/LaunchSettings.h"
 
 #include "Cafe/OS/common/OSCommon.h"
 #include "Cafe/Filesystem/fsc.h"
@@ -102,6 +103,11 @@ MPTR RPLLoader_AllocateCodeSpace(uint32 size, uint32 alignment)
 	return codeAddr;
 }
 
+void RPLLoader_FreeCodeSpace(MPTR address)
+{
+	rplLoaderHeap_codeArea2.free(memory_getPointerFromVirtualOffset(address));
+}
+
 uint32 RPLLoader_AllocateDataSpace(RPLModule* rpl, uint32 size, uint32 alignment)
 {
 	if (rplLoader_applicationHasMemoryControl)
@@ -111,6 +117,12 @@ uint32 RPLLoader_AllocateDataSpace(RPLModule* rpl, uint32 size, uint32 alignment
 		PPCCoreCallback(rpl->funcAlloc.value(), size, alignment, memPtr.GetPointer());
 		return (uint32)*(memPtr.GetPointer());
 	}
+	return RPLLoader_AllocateBootDataSpace(size, alignment);
+}
+
+uint32 RPLLoader_AllocateBootDataSpace(uint32 size, uint32 alignment)
+{
+	cemu_assert(!rplLoader_applicationHasMemoryControl);
 	rplLoader_currentDataAllocatorAddr = (rplLoader_currentDataAllocatorAddr + alignment - 1) & ~(alignment - 1);
 	uint32 mem = rplLoader_currentDataAllocatorAddr;
 	rplLoader_currentDataAllocatorAddr += size;
@@ -774,7 +786,30 @@ uint32 rpl_mapHLEImport(RPLModule* rplLoaderContext, const char* rplName, const 
 	sint32 functionIndex = osLib_getFunctionIndex(libName, funcName);
 	if (functionIndex >= 0)
 	{
-		MPTR codeAddr = memory_getVirtualOffsetFromPointer(RPLLoader_AllocateTrampolineCodeSpace(4));
+		uint32 patchOffset = 0;
+		uint32 patchInstruction = 0;
+		if ((LaunchSettings::AromaModuleDirectory() || !LaunchSettings::AromaPlugins().empty()) &&
+			std::string_view(libName) == "coreinit")
+		{
+			// Some plugins inspect and patch the retail loader's permission
+			// branches. HLE already exposes this metadata. Give those writes
+			// dedicated space outside the executable HLE instruction.
+			if (std::string_view(funcName) == "OSDynLoad_GetNumberOfRPLs")
+			{
+				patchOffset = 6 * 4;
+				patchInstruction = 0x41820038;
+			}
+			else if (std::string_view(funcName) == "OSDynLoad_GetRPLInfo")
+			{
+				patchOffset = 22 * 4;
+				patchInstruction = 0x41820100;
+			}
+		}
+		auto* code = RPLLoader_AllocateTrampolineCodeSpace(patchOffset + 4);
+		memset(code, 0, patchOffset + 4);
+		MPTR codeAddr = memory_getVirtualOffsetFromPointer(code);
+		if (patchOffset)
+			memory_write<uint32>(codeAddr + patchOffset, patchInstruction);
 		uint32 opcode = (1 << 26) | functionIndex;
 		memory_write<uint32>(codeAddr, opcode);
 		// register mapped import
@@ -1915,6 +1950,9 @@ bool RPLLoader_IsKnownCafeOSModule(std::string_view name)
 
 COSModule* RPLLoader_GetHLECafeOSModule(std::string_view moduleName)
 {
+	if ((moduleName == "homebrew_content_redirection" || moduleName == "homebrew_curlwrapper") &&
+		LaunchSettings::AromaPlugins().empty())
+		return nullptr;
 	std::span<COSModule*> cosModules = GetCOSModules();
 	for (auto& module : cosModules)
 	{
@@ -2056,7 +2094,7 @@ uint32 RPLLoader_GetHandleByModuleName(const char* name)
 		if (dep->moduleName == moduleName)
 		{
 			cemu_assert_debug(dep->loadAttempted);
-			if (!dep->isCafeOSModule && !dep->rplLoaderContext)
+			if (!dep->isCafeOSModule && !dep->rplLoaderContext && !dep->rplHLEModule)
 				return RPL_INVALID_HANDLE; // module not found
 			return dep->coreinitHandle;
 		}
@@ -2347,6 +2385,9 @@ uint32 RPLLoader_FindModuleOrHLEExport(uint32 moduleHandle, bool isData, const c
 		}
 	}
 
+	if (!dependency)
+		return MPTR_NULL;
+
 	uint32 exportResult = 0;
 	if (rplLoaderContext)
 	{
@@ -2354,16 +2395,18 @@ uint32 RPLLoader_FindModuleOrHLEExport(uint32 moduleHandle, bool isData, const c
 	}
 	else
 	{
-		// attempt to find HLE export
+		// Optional Aroma API exports must report a miss to OSDynLoad_FindExport.
+		const bool strict = dependency->moduleName.starts_with("homebrew_");
 		if (isData)
 		{
 			MPTR weakExportAddr = osLib_getPointer(dependency->moduleName.c_str(), exportName);
-			cemu_assert_debug(weakExportAddr != 0xFFFFFFFF);
-			exportResult = weakExportAddr;
+			if (!strict)
+				cemu_assert_debug(weakExportAddr != 0xFFFFFFFF);
+			exportResult = strict && weakExportAddr == 0xFFFFFFFF ? MPTR_NULL : weakExportAddr;
 		}
 		else
 		{
-			exportResult = rpl_mapHLEImport(rplLoaderContext, dependency->moduleName.c_str(), exportName, true);
+			exportResult = rpl_mapHLEImport(rplLoaderContext, dependency->moduleName.c_str(), exportName, !strict);
 		}
 	}
 

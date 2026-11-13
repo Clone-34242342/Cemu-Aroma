@@ -10,6 +10,8 @@ void RPLLoader_UnloadAll();
 uint8* RPLLoader_AllocateTrampolineCodeSpace(sint32 size);
 
 MPTR RPLLoader_AllocateCodeSpace(uint32 size, uint32 alignment);
+void RPLLoader_FreeCodeSpace(MPTR address);
+uint32 RPLLoader_AllocateBootDataSpace(uint32 size, uint32 alignment);
 
 uint32 RPLLoader_GetMaxCodeOffset();
 uint32 RPLLoader_GetDataAllocatorAddr();
@@ -31,6 +33,7 @@ void RPLLoader_NotifyControlPassedToApplication();
 void RPLLoader_AddDependency(std::string_view name, bool isMainExecutable = false);
 void RPLLoader_RemoveDependency(uint32 handle);
 bool RPLLoader_HasDependency(std::string_view name);
+bool RPLLoader_IsKnownCafeOSModule(std::string_view name);
 void RPLLoader_UpdateDependencies();
 
 void RPLLoader_LoadCoreinit();

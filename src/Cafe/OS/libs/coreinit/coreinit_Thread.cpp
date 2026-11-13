@@ -1,4 +1,5 @@
 #include "Cafe/OS/common/OSCommon.h"
+#include "Cafe/Aroma/WupsLoader.h"
 #include "Cafe/HW/Espresso/PPCCallback.h"
 #include "Cafe/OS/RPL/rpl.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Thread.h"
@@ -589,6 +590,7 @@ namespace coreinit
 			PPCCoreCallback(_swapEndianU32(gCoreinitData->__cpp_exception_cleanup_ptr), &currentThread->crt.eh_globals);
 			currentThread->crt.eh_globals = nullptr;
 		}
+		Aroma::CleanupThread();
 		// set exit code
 		currentThread->exitValue = exitValue;
 
@@ -1254,6 +1256,10 @@ namespace coreinit
 		__OSUnlockScheduler();
 		while (true)
 		{
+			// The main idle core polls events and never waits on the run queue.
+			if (!sSchedulerActive.load(std::memory_order::relaxed))
+				Fiber::Switch(*t_schedulerFiber);
+
 			if (!g_coreRunQueueThreadCount[coreIndex].isZero()) // avoid hammering the lock on the main core if there is no runable thread
 			{
 				__OSLockScheduler();
@@ -1275,8 +1281,6 @@ namespace coreinit
 			{
 				// wait for semaphore (only in multicore mode)
 				g_coreRunQueueThreadCount[t_assignedCoreIndex].waitUntilNonZero();
-				if (!sSchedulerActive.load(std::memory_order::relaxed))
-					Fiber::Switch(*t_schedulerFiber); // switch back to original thread to exit
 			}
 		}
 	}

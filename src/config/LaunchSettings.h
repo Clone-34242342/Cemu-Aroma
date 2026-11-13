@@ -16,6 +16,8 @@ public:
 
 	static std::optional<int> HandleCommandline(const std::vector<std::wstring>& args);
 
+	static const std::vector<fs::path>& AromaPlugins() { return s_aroma_plugin; }
+	static const std::optional<fs::path>& AromaModuleDirectory() { return s_aroma_module_directory; }
 	static std::optional<fs::path> GetLoadFile() { return s_load_game_file; }
 	static std::optional<uint64> GetLoadTitleID() {return s_load_title_id;}
 	static std::optional<fs::path> GetMLCPath() { return s_mlc_path; }
@@ -43,6 +45,8 @@ public:
 	static uint32 GetPPCRecUpperAddr() { return ppcRec_limitUpperAddr; };
 
 private:
+	inline static std::vector<fs::path> s_aroma_plugin{};
+	inline static std::optional<fs::path> s_aroma_module_directory{};
 	inline static std::optional<fs::path> s_load_game_file{};
 	inline static std::optional<uint64> s_load_title_id{};
 	inline static std::optional<fs::path> s_mlc_path{};

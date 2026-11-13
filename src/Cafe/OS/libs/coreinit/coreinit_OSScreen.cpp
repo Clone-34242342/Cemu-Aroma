@@ -4,6 +4,7 @@
 
 #include "Cafe/OS/libs/coreinit/coreinit_OSScreen_font.h"
 #include "Cafe/OS/libs/coreinit/coreinit_OSScreen.h"
+#include "Cafe/OS/libs/coreinit/coreinit.h"
 
 namespace coreinit
 {
@@ -20,6 +21,27 @@ namespace coreinit
 	};
 
 	void* currentScreenBasePtr[2] = { 0 };
+
+	namespace
+	{
+		constexpr uint32 kDisplayControllerPhysicalBase = 0x0c200000;
+		constexpr uint32 kDisplayRegisterCount = 0x1a67;
+		constexpr uint32 kDisplayRegisterStride = 0x200;
+		constexpr uint32 kGraphicsEnable = 0x1840;
+		constexpr uint32 kGraphicsPitch = 0x1848;
+		constexpr uint32 kGraphicsWidth = 0x184d;
+		constexpr uint32 kGraphicsHeight = 0x184e;
+		constexpr uint32 kOverlayPitch = 0x1866;
+		CafeStaticVar<uint32be, kDisplayRegisterCount> s_displayRegisters{g_coreinitStaticData};
+
+		MPTR __OSPhysicalToEffectiveUncached(uint32 physicalAddress)
+		{
+			const auto offset = physicalAddress - kDisplayControllerPhysicalBase;
+			if (offset >= kDisplayRegisterCount * sizeof(uint32be))
+				return MPTR_NULL;
+			return memory_getVirtualOffsetFromPointer(s_displayRegisters.GetPtr()) + offset;
+		}
+	}
 
 	void _OSScreen_Clear(uint32 screenIndex, uint32 color)
 	{
@@ -156,6 +178,18 @@ namespace coreinit
 
 	void InitializeOSScreen()
 	{
+		auto* displayRegisters = s_displayRegisters.GetPtr();
+		std::fill_n(displayRegisters, kDisplayRegisterCount, uint32be{0});
+		for (uint32 screen = 0; screen < std::size(screenSizes); ++screen)
+		{
+			auto* registers = displayRegisters + screen * kDisplayRegisterStride;
+			registers[kGraphicsEnable] = 1;
+			registers[kGraphicsPitch] = screenSizes[screen].pitch;
+			registers[kGraphicsWidth] = screenSizes[screen].x;
+			registers[kGraphicsHeight] = screenSizes[screen].y;
+			registers[kOverlayPitch] = screenSizes[screen].pitch;
+		}
+		cafeExportRegister("coreinit", __OSPhysicalToEffectiveUncached, LogType::Placeholder);
 		cafeExportRegister("coreinit", OSScreenInit, LogType::Placeholder);
 		cafeExportRegister("coreinit", OSScreenGetBufferSizeEx, LogType::Placeholder);
 		cafeExportRegister("coreinit", OSScreenSetBufferEx, LogType::Placeholder);

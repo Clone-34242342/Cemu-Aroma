@@ -13,8 +13,12 @@
 #include "Cafe/IOSU/legacy/iosu_crypto.h"
 #include "Cafe/OS/libs/nsysnet/nsysnet.h"
 #include "Cafe/OS/libs/coreinit/coreinit_MEM.h"
+#include "Cafe/OS/libs/coreinit/coreinit.h"
+#include "config/LaunchSettings.h"
 #include "Cafe/OS/common/PPCConcurrentQueue.h"
 #include "config/CemuConfig.h"
+
+void nsysnetExport_setsockopt(PPCInterpreter_t* cpu);
 
 namespace nlibcurl
 {
@@ -71,6 +75,8 @@ namespace nlibcurl
 		MAX_RECV_SPEED_LARGE = 30146,
 		SOCKOPTFUNCTION = 20148,
 		SOCKOPTDATA = 10149,
+		ACCEPT_ENCODING = 10102,
+		TIMEOUT_MS = 155,
 		CONNECTTIMEOUT_MS = 156,
 		NSSL_CONTEXT = 210, // set context created with NSSLCreateContext
 		NSSL_VERIFY_OPTIONS = 211,
@@ -274,6 +280,7 @@ namespace nlibcurl
 		CURL* curl;
 		bool isDirty{true}; // set when the options of the guest handle changed and need to be synced
 		curl_slist* headers{};
+		std::optional<std::string> acceptEncoding;
 		// like nlibcurl we keep using the read callback that was set when the transfer started
 		MEMPTR<void> readFunc;
 		MEMPTR<void> readData;
@@ -662,6 +669,7 @@ namespace nlibcurl
 		else
 			::curl_easy_setopt(hostCurl, CURLOPT_PROXY, set.str[WU_STRING_PROXY].GetPtr());
 		::curl_easy_setopt(hostCurl, CURLOPT_USERAGENT, set.str[WU_STRING_USERAGENT].GetPtr());
+		::curl_easy_setopt(hostCurl, CURLOPT_ACCEPT_ENCODING, hostState->acceptEncoding ? hostState->acceptEncoding->c_str() : nullptr);
 		::curl_easy_setopt(hostCurl, CURLOPT_NOSIGNAL, (long)set.no_signal);
 		::curl_easy_setopt(hostCurl, CURLOPT_FOLLOWLOCATION, (long)set.http_follow_location);
 		::curl_easy_setopt(hostCurl, CURLOPT_BUFFERSIZE, (long)set.buffer_size);
@@ -740,17 +748,30 @@ namespace nlibcurl
 		return mem;
 	}
 
-	CURLcode curl_global_init(uint32 flags)
+	// Caller holds s_curlMutex. Publish the initialized state only after
+	// the guest allocator trampolines and host libcurl are ready.
+	CURLcode InitCurlLocked(uint32 flags)
 	{
-		if (g_nlibcurl.initialized++)
+		if (g_nlibcurl.initialized)
 			return CURLE_OK;
+
+		const auto result = ::curl_global_init(flags);
+		if (result != CURLE_OK)
+			return result;
 
 		g_nlibcurl.malloc = makeCallableExport<DefaultMalloc>();
 		g_nlibcurl.calloc = makeCallableExport<DefaultCalloc>();
 		g_nlibcurl.free = makeCallableExport<DefaultFree>();
 		g_nlibcurl.strdup = makeCallableExport<DefaultStrdup>();
 
-		return ::curl_global_init(flags);
+		g_nlibcurl.initialized = 1;
+		return CURLE_OK;
+	}
+
+	CURLcode curl_global_init(uint32 flags)
+	{
+		std::unique_lock lock(s_curlMutex);
+		return InitCurlLocked(flags);
 	}
 
 	CURLcode curl_global_init_mem(uint32 flags, MEMPTR<curl_malloc_callback> malloc_callback, MEMPTR<curl_free_callback> free_callback, MEMPTR<curl_realloc_callback> realloc_callback, MEMPTR<curl_strdup_callback> strdup_callback, MEMPTR<curl_calloc_callback> calloc_callback)
@@ -758,10 +779,11 @@ namespace nlibcurl
 		if(!malloc_callback || !free_callback || !realloc_callback || !strdup_callback || !calloc_callback)
 			return CURLE_FAILED_INIT;
 
+		std::unique_lock lock(s_curlMutex);
 		CURLcode result = CURLE_OK;
 		if (g_nlibcurl.initialized == 0)
 		{
-			result = curl_global_init(flags);
+			result = InitCurlLocked(flags);
 			if (result == CURLE_OK)
 			{
 				g_nlibcurl.malloc = malloc_callback;
@@ -775,7 +797,7 @@ namespace nlibcurl
 
 	CURLM_t* curl_multi_init()
 	{
-		if (g_nlibcurl.initialized == 0 && curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
+		if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
 			return nullptr;
 
 		MEMPTR<CURLM_t> curlm{ PPCCoreCallback(g_nlibcurl.calloc.GetMPTR(), 1, ppcsizeof<CURLM_t>()) };
@@ -1025,7 +1047,7 @@ namespace nlibcurl
 
 	CURL_t* curl_easy_init()
 	{
-		if (g_nlibcurl.initialized == 0 && curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
+		if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
 			return nullptr;
 
 		// Curl_open
@@ -1076,6 +1098,7 @@ namespace nlibcurl
 		// curl_apply_default_proxy_config();
 		FreeGuestStrings(curl);
 		curl->set.SetToDefault();
+		hostState->acceptEncoding.reset();
 		// the host handle is not reset, since nlibcurl keeps the info of the last transfer (response code etc) after a reset
 		// only the progress is cleared. All options we use are applied again when the next transfer starts
 		hostState->isDirty = true;
@@ -1170,6 +1193,9 @@ namespace nlibcurl
 			case WU_CURLOPT::TIMEOUT:
 				set.timeout = value32 * 1000;
 				break;
+			case WU_CURLOPT::TIMEOUT_MS:
+				set.timeout = value32;
+				break;
 			case WU_CURLOPT::CONNECTTIMEOUT:
 				set.connecttimeout = value32 * 1000;
 				break;
@@ -1197,6 +1223,12 @@ namespace nlibcurl
 				break;
 			case WU_CURLOPT::PROXY:
 				SetGuestString(curl, WU_STRING_PROXY, (const char*)valuePtr.GetPtr());
+				break;
+			case WU_CURLOPT::ACCEPT_ENCODING:
+				if (valuePtr)
+					hostState->acceptEncoding = static_cast<const char*>(valuePtr.GetPtr());
+				else
+					hostState->acceptEncoding.reset();
 				break;
 			case WU_CURLOPT::USERAGENT:
 				SetGuestString(curl, WU_STRING_USERAGENT, (const char*)valuePtr.GetPtr());
@@ -1451,6 +1483,63 @@ namespace nlibcurl
 			g_nlibcurl = {};
 		}
 	}s_COSnlibcurlModule;
+
+	CafeStaticVar<char, 256> s_aromaCurlVersion{coreinit::g_coreinitStaticData};
+
+	const char* AromaCurlVersion()
+	{
+		return s_aromaCurlVersion.GetPtr();
+	}
+
+	WU_curl_slist* AromaSlistAppend(WU_curl_slist* list, const char* header)
+	{
+		// The wrapper allows header creation before the first easy handle.
+		if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
+			return nullptr;
+		return curl_slist_append(list, header);
+	}
+
+	void AromaSlistFree(WU_curl_slist* list)
+	{
+		while (list)
+		{
+			auto* next = list->next.GetPtr();
+			GuestFree(list->data.GetPtr());
+			GuestFree(list);
+			list = next;
+		}
+	}
+
+	class AromaCurlModule : public COSModule
+	{
+	public:
+		std::string_view GetName() override { return "homebrew_curlwrapper"; }
+		std::vector<std::string_view> GetDependencies() override { return {"nlibcurl"}; }
+
+		void RPLMapped() override
+		{
+			if (LaunchSettings::AromaPlugins().empty())
+				return;
+			const auto version = std::string_view(::curl_version()).substr(0, 255);
+			memcpy(s_aromaCurlVersion.GetPtr(), version.data(), version.size());
+			s_aromaCurlVersion.GetPtr()[version.size()] = 0;
+			osLib_addFunction("homebrew_curlwrapper", "setsockopt", nsysnetExport_setsockopt);
+			cafeExportRegisterFunc(AromaCurlVersion, "homebrew_curlwrapper", "curl_version", LogType::nlibcurl);
+			cafeExportRegister("homebrew_curlwrapper", curl_easy_init, LogType::nlibcurl);
+			cafeExportRegisterFunc(nlibcurl_easy_setopt, "homebrew_curlwrapper", "curl_easy_setopt", LogType::nlibcurl);
+			cafeExportRegister("homebrew_curlwrapper", curl_easy_perform, LogType::nlibcurl);
+			cafeExportRegister("homebrew_curlwrapper", curl_easy_getinfo, LogType::nlibcurl);
+			cafeExportRegister("homebrew_curlwrapper", curl_easy_cleanup, LogType::nlibcurl);
+			cafeExportRegisterFunc(AromaSlistAppend, "homebrew_curlwrapper", "curl_slist_append", LogType::nlibcurl);
+			cafeExportRegisterFunc(AromaSlistFree, "homebrew_curlwrapper", "curl_slist_free_all", LogType::nlibcurl);
+		}
+	};
+
+	COSModule* GetAromaModule()
+	{
+		static AromaCurlModule module;
+		return &module;
+	}
 
 	COSModule* GetModule()
 	{

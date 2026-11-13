@@ -1,4 +1,5 @@
 #include "Cafe/OS/common/OSCommon.h"
+#include "Cafe/Aroma/WupsLoader.h"
 #include "Cafe/HW/Espresso/PPCCallback.h"
 #include "Cafe/OS/RPL/rpl.h"
 #include "Cafe/OS/RPL/rpl_structs.h"
@@ -87,6 +88,11 @@ namespace coreinit
 				break;
 			}
 		}
+		if (const auto module = Aroma::FindModuleHandle(tempLibName))
+		{
+			*moduleHandleOut = module;
+			return 0;
+		}
 		// search for loaded modules with matching name
 		uint32 rplHandle = RPLLoader_GetHandleByModuleName(libName);
 		if (rplHandle == RPL_INVALID_HANDLE && !RPLLoader_HasDependency(libName))
@@ -149,7 +155,7 @@ namespace coreinit
 
 	void OSDynLoad_Release(uint32 moduleHandle)
 	{
-		if (moduleHandle == RPL_INVALID_HANDLE)
+		if (moduleHandle == RPL_INVALID_HANDLE || !Aroma::FindModuleName(moduleHandle).empty())
 			return;
 
 		for (const auto& cb : notifyCallbacks) 
@@ -198,7 +204,9 @@ namespace coreinit
 			moduleHandle = RPLLoader_GetMainModuleHandle();
 		}
 
-		MPTR exportResult = RPLLoader_FindModuleOrHLEExport(moduleHandle, isData, exportName);
+		MPTR exportResult = Aroma::FindModuleName(moduleHandle).empty()
+			? RPLLoader_FindModuleOrHLEExport(moduleHandle, isData, exportName)
+			: Aroma::FindModuleExport(moduleHandle, isData, exportName);
 		*addrOut = exportResult;
 
 		if (exportResult == MPTR_NULL)
@@ -215,7 +223,9 @@ namespace coreinit
 			moduleHandle = RPLLoader_GetMainModuleHandle();
 		}
 
-		const std::string moduleName = RPLLoader_GetModuleNameByHandle(moduleHandle);
+		const auto aromaName = Aroma::FindModuleName(moduleHandle);
+		const std::string moduleName = aromaName.empty()
+			? RPLLoader_GetModuleNameByHandle(moduleHandle) : std::string(aromaName);
 		std::strncpy(nameBuf, moduleName.c_str(), *nameBufSize);
 
 		return 0;

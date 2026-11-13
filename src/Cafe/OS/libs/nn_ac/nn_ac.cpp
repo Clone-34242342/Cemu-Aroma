@@ -257,6 +257,17 @@ namespace nn_ac
 		return Initialize();
 	}
 
+	void ACFinalize()
+	{
+		// The HLE library has no per-client resources to release.
+	}
+
+	nnResult ACClose()
+	{
+		// Guest socket lifetimes are managed by nsysnet.
+		return BUILD_NN_RESULT(NN_RESULT_LEVEL_SUCCESS, NN_RESULT_MODULE_NN_AC, 0);
+	}
+
 	bool ACIsSuccess(betype<nnResult>* r)
 	{
 		return NN_RESULT_IS_SUCCESS(*r) ? 1 : 0;
@@ -305,6 +316,8 @@ namespace nn_ac
 
 		// AC also offers C-style wrappers
 		cafeExportRegister("nn_ac", ACInitialize, LogType::Placeholder);
+		cafeExportRegister("nn_ac", ACFinalize, LogType::Placeholder);
+		cafeExportRegister("nn_ac", ACClose, LogType::Placeholder);
 		cafeExportRegister("nn_ac", ACIsSuccess, LogType::Placeholder);
 		cafeExportRegister("nn_ac", ACIsFailure, LogType::Placeholder);
 		cafeExportRegister("nn_ac", ACGetConnectStatus, LogType::Placeholder);

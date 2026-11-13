@@ -1,10 +1,72 @@
-# **Cemu - Wii U emulator**
+<div align="center">
 
-This fork adds Python access to memory, code, registers, breakpoints, and
-execution control without opening the PPC debugger window.
-See [Python debugging](README-PYTHON.md) for usage.
+# Cemu Aroma
 
-[![Build Process](https://github.com/cemu-project/Cemu/actions/workflows/build.yml/badge.svg)](https://github.com/cemu-project/Cemu/actions/workflows/build.yml)
+**Wii U Aroma plugins, running inside Cemu.**
+
+Created by **Little_mac**. To our knowledge, this is the world’s first Wii U emulator fork to run Aroma WPS plugins directly.
+
+[![License](https://img.shields.io/badge/license-MPL%202.0-blue)](LICENSE.txt)
+[![Aroma](https://img.shields.io/badge/Aroma-WPS%20plugin%20support-18a999)](README-AROMA.md)
+[![Python](https://img.shields.io/badge/Python-loopback%20debugger-3776AB)](README-PYTHON.md)
+[![Tested](https://img.shields.io/badge/tested-Linux%20%7C%20AMD%20Vulkan-d94832)](docs/VALIDATION.md)
+
+[Quick start](#quick-start) · [Plugin compatibility](#plugin-compatibility) · [Architecture](README-AROMA.md) · [Validation](docs/VALIDATION.md)
+
+<img src="docs/images/london-amd.png" width="47%" alt="Wii Street U GamePad showing the London panorama">
+<img src="docs/images/paris-amd.png" width="47%" alt="Wii Street U GamePad showing the Paris panorama">
+
+*London and Paris, captured from one Vulkan session on a Radeon RX 6700 XT.*
+
+</div>
+
+The same plugin file used on a Wii U can run its PowerPC startup code in Cemu. For Wii Street U Revival, that means SD Cafiine supplies the content from the emulated SD card and the Revival plugin serves live map and panorama data. Python can inspect the running guest from a terminal while the title is on screen.
+
+## Quick start
+
+1. Clone this repository recursively (`git clone --recursive https://github.com/Littlemac123/Cemu-Aroma.git`) and follow the platform dependencies in the [build guide](BUILD.md). The verified configuration used Linux.
+2. Prepare your own dumped title and plugin files. For Wii Street U, follow the [Revival setup](https://github.com/Littlemac123/WiiStreetU-Revival) and place the prepared content in Cemu’s emulated SD card.
+3. Launch the title with SD Cafiine first and Revival second. Use the executable path produced by your build.
+
+```sh
+./bin/Cemu_relwithdebinfo --forward-console-logging \
+  --aroma-plugin /path/to/sdcafiine.wps \
+  --aroma-plugin /path/to/WiiStreetU-Direct.wps \
+  -g /path/to/WiiULauncher.rpx
+```
+
+Add `--python-debug` to attach the [Python debugger](README-PYTHON.md). That option stops at title entry until you resume or detach. For a first launch, check the log for SD Cafiine’s content merge, Revival’s `wsudata:/` mount, and a successful tile request.
+
+## Plugin compatibility
+
+| Component | Verified behavior | Open work |
+| --- | --- | --- |
+| Wii Street U Revival | Live map, panoramas, and consecutive searches in an isolated Cemu profile | Broader stability and platform coverage |
+| SD Cafiine | Loads prepared content from the emulated SD card alongside Revival | Configuration UI and settings writes |
+| GiveMiiYouTube | Plugin replacement, guest search, and video playback observed in a Linux Vulkan interpreter test | Recompiled startup and intermittent video presentation |
+| WUMS modules | Linking and lifecycle callbacks exercised with fixture modules | Full Aroma runtime and original settings menu |
+
+<details>
+<summary><strong>How the fork runs an Aroma plugin</strong></summary>
+
+The loader maps the WPS image into guest memory, resolves its imports, and dispatches supported hooks in the emulated title. Cemu supplies compatibility exports for services the tested plugins use. The optional WUMS path links module images and dispatches supported lifecycle hooks. This is a targeted Aroma runtime inside Cemu’s existing Wii U emulation. [Architecture and research notes](README-AROMA.md)
+
+</details>
+
+<details>
+<summary><strong>What the validation run covered</strong></summary>
+
+The Radeon Vulkan run submitted two distinct searches, loaded the corresponding panoramas, and exited with status zero. Vulkan validation reported zero errors in that run. [Test procedure and known limits](docs/VALIDATION.md)
+
+</details>
+
+## Credits
+
+**Little_mac** created this fork. Thanks to the upstream Cemu contributors and the Wii U homebrew developers behind Aroma, WUPS, WUMS, SD Cafiine, and the plugins used for compatibility testing.
+
+## Upstream Cemu
+
+[![Upstream build](https://github.com/cemu-project/Cemu/actions/workflows/build.yml/badge.svg)](https://github.com/cemu-project/Cemu/actions/workflows/build.yml)
 [![Discord](https://img.shields.io/discord/286429969104764928?label=Cemu&logo=discord&logoColor=FFFFFF)](https://discord.gg/5psYsup)
 
 This is the code repository of Cemu, a Wii U emulator that is able to run most Wii U games and homebrew in a playable state.

@@ -20,6 +20,8 @@ static_assert(sizeof(FSAsyncParams) == 0xC);
 
 namespace coreinit
 {
+	void mountSDCard();
+
 	struct FSCmdBlockBody;
 
 	struct FSCmdQueue

@@ -1083,6 +1083,10 @@ void VulkanRenderer::sync_inputTexturesChanged(bool withinFeedbackLoopRenderPass
 			memoryBarrier.dstAccessMask |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
 		}
 
+		// Barriers that synchronize vertex or geometry reads must run outside a render pass.
+		if (!withinFeedbackLoopRenderPass)
+			draw_endRenderPass();
+
 		VkDependencyFlags dependencyFlags = withinFeedbackLoopRenderPass ? VK_DEPENDENCY_BY_REGION_BIT : 0;
 		vkCmdPipelineBarrier(m_state.currentCommandBuffer, srcStage, dstStage, dependencyFlags, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
 
@@ -1226,16 +1230,22 @@ void VulkanRenderer::draw_setRenderPass()
 	{
 		if (m_state.descriptorSetsChanged || feedbackLoopHandlesSelfDependency)
 			sync_inputTexturesChanged(feedbackLoopHandlesSelfDependency);
-		if (UseAttachmentFeedbackLoop() && currentSelfDependencyInfo.GetAspectMask() != m_state.feedbackLoopImageAspect)
+		if (m_state.activeRenderpassFBO)
 		{
-			m_state.feedbackLoopImageAspect = currentSelfDependencyInfo.GetAspectMask();
-			vkCmdSetAttachmentFeedbackLoopEnableEXT(m_state.currentCommandBuffer, currentSelfDependencyInfo.GetAspectMask());
+			if (UseAttachmentFeedbackLoop() && currentSelfDependencyInfo.GetAspectMask() != m_state.feedbackLoopImageAspect)
+			{
+				m_state.feedbackLoopImageAspect = currentSelfDependencyInfo.GetAspectMask();
+				vkCmdSetAttachmentFeedbackLoopEnableEXT(m_state.currentCommandBuffer, m_state.feedbackLoopImageAspect);
+			}
+			return;
 		}
-		return;
 	}
-	draw_endRenderPass();
-	if (m_state.descriptorSetsChanged)
-		sync_inputTexturesChanged();
+	else
+	{
+		draw_endRenderPass();
+		if (m_state.descriptorSetsChanged)
+			sync_inputTexturesChanged();
+	}
 
 	sync_RenderPassLoadTextures(fboVk);
 

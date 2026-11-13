@@ -4,4 +4,5 @@
 namespace nlibcurl
 {
 	COSModule* GetModule();
+	COSModule* GetAromaModule();
 }

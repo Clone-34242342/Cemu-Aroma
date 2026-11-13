@@ -1,3 +1,4 @@
+#include "Cafe/Aroma/WupsLoader.h"
 #include "Cafe/OS/common/OSCommon.h"
 #include "WindowSystem.h"
 #include "Cafe/GameProfile/GameProfile.h"
@@ -23,6 +24,7 @@
 #include "Cafe/OS/RPL/rpl.h"
 #include "Cafe/HW/Latte/Core/Latte.h"
 #include "Cafe/Filesystem/FST/FST.h"
+#include "Cafe/Filesystem/fsc.h"
 #include "Common/FileStream.h"
 #include "GamePatch.h"
 #include "HW/Espresso/Debugger/GDBStub.h"
@@ -393,6 +395,22 @@ void cemu_initForGame()
 	uint32 linkTimeStart = GetTickCount();
 	RPLLoader_UpdateDependencies();
 	RPLLoader_Link();
+	if (const auto& modules = LaunchSettings::AromaModuleDirectory())
+	{
+		try { Aroma::LinkModules(*modules); }
+		catch (const std::exception& error)
+		{
+			cemuLog_log(LogType::Force, "WUMS: {}", error.what());
+		}
+	}
+	for (const auto& plugin : LaunchSettings::AromaPlugins())
+	{
+		try { Aroma::MapPlugin(plugin); }
+		catch (const std::exception& error)
+		{
+			cemuLog_log(LogType::Force, "WUPS: {}", error.what());
+		}
+	}
 	RPLLoader_NotifyControlPassedToApplication();
 	uint32 linkTime = GetTickCount() - linkTimeStart;
 	cemuLog_log(LogType::Force, "RPL link time: {}ms", linkTime);
@@ -424,6 +442,8 @@ void cemu_initForGame()
 	// load graphic packs
 	cemuLog_log(LogType::Force, "------- Activate graphic packs -------");
 	GraphicPack2::ActivateForCurrentTitle();
+	if (CafeSystem::GetForegroundTitleId() == 0x0005000010132000ull)
+		fscDeviceRedirect_map();
 	// print audio log
 	IAudioAPI::PrintLogging();
 	IAudioInputAPI::PrintLogging();
@@ -1068,8 +1088,11 @@ namespace CafeSystem
 
 	void ShutdownTitle()
 	{
+		static std::mutex shutdownMutex;
+		std::lock_guard lock(shutdownMutex);
 		if(!sSystemRunning)
 			return;
+		Aroma::EndPluginForHostStop();
 		coreinit::OSSchedulerEnd();
 		Latte_Stop();
 		coreinit::IPCCloseAllHandles();
@@ -1079,6 +1102,7 @@ namespace CafeSystem
 		GX2::_GX2DriverReset();
 		nn::save::ResetToDefaultState();
 		coreinit::__OSDeleteAllActivePPCThreads();
+		Aroma::ResetPlugin();
 		RPLLoader_UnloadAll();
 		for(auto it = s_iosuModules.rbegin(); it != s_iosuModules.rend(); ++it)
 			(*it)->TitleStop();

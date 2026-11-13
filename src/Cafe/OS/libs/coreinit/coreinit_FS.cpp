@@ -1,3 +1,4 @@
+#include "Cafe/Aroma/ContentRedirection.h"
 #include <OS/RPL/rpl.h>
 #include "config/ActiveSettings.h"
 #include "Cafe/OS/libs/coreinit/coreinit_SystemInfo.h"
@@ -924,6 +925,8 @@ namespace coreinit
 
 	sint32 FSOpenFile(FSClient_t* fsClient, FSCmdBlock_t* fsCmdBlock, char* path, char* mode, FSFileHandlePtr outFileHandle, uint32 errHandling)
 	{
+		if (const auto result = Aroma::ContentRedirection::Open(path, mode, outFileHandle.GetPtr()))
+			return *result;
 		StackAllocator<FSAsyncParams, 1> asyncParams;
 		__FSAsyncToSyncInit(fsClient, fsCmdBlock, &asyncParams);
 		sint32 fsAsyncRet = FSOpenFileAsync(fsClient, fsCmdBlock, path, mode, outFileHandle, errHandling, &asyncParams);
@@ -953,6 +956,8 @@ namespace coreinit
 
 	sint32 FSOpenFileEx(FSClient_t* fsClient, FSCmdBlock_t* fsCmdBlock, char* path, char* mode, uint32 createMode, uint32 openFlag, uint32 preallocSize, FSFileHandlePtr outFileHandle, uint32 errHandling)
 	{
+		if (const auto result = Aroma::ContentRedirection::Open(path, mode, outFileHandle.GetPtr()))
+			return *result;
 		StackAllocator<FSAsyncParams, 1> asyncParams;
 		__FSAsyncToSyncInit(fsClient, fsCmdBlock, &asyncParams);
 		sint32 fsAsyncRet = FSOpenFileExAsync(fsClient, fsCmdBlock, path, mode, createMode, openFlag, preallocSize, outFileHandle, errHandling, &asyncParams);
@@ -987,6 +992,8 @@ namespace coreinit
 
 	sint32 FSCloseFile(FSClient_t* fsClient, FSCmdBlock_t* fsCmdBlock, uint32 fileHandle, uint32 errHandling)
 	{
+		if (const auto result = Aroma::ContentRedirection::Close(fileHandle))
+			return *result;
 		StackAllocator<FSAsyncParams, 1> asyncParams;
 		__FSAsyncToSyncInit(fsClient, fsCmdBlock, &asyncParams);
 		sint32 fsAsyncRet = FSCloseFileAsync(fsClient, fsCmdBlock, fileHandle, errHandling, &asyncParams);
@@ -1102,6 +1109,8 @@ namespace coreinit
 
 	sint32 FSReadFile(FSClient_t* fsClient, FSCmdBlock_t* fsCmdBlock, void* dst, uint32 size, uint32 count, uint32 fileHandle, uint32 flag, uint32 errorMask)
 	{
+		if (const auto result = Aroma::ContentRedirection::Read(fileHandle, dst, size, count))
+			return *result;
 		StackAllocator<FSAsyncParams, 1> asyncParams;
 		__FSAsyncToSyncInit(fsClient, fsCmdBlock, &asyncParams);
 		sint32 fsAsyncRet = FSReadFileAsync(fsClient, fsCmdBlock, dst, size, count, fileHandle, flag, errorMask, asyncParams.GetPointer());
@@ -1117,6 +1126,8 @@ namespace coreinit
 
 	sint32 FSReadFileWithPos(FSClient_t* fsClient, FSCmdBlock_t* fsCmdBlock, void* dst, uint32 size, uint32 count, uint32 filePos, uint32 fileHandle, uint32 flag, uint32 errorMask)
 	{
+		if (const auto result = Aroma::ContentRedirection::ReadWithPosition(fileHandle, dst, size, count, filePos))
+			return *result;
 		StackAllocator<FSAsyncParams, 1> asyncParams;
 		__FSAsyncToSyncInit(fsClient, fsCmdBlock, &asyncParams);
 		sint32 fsAsyncRet = FSReadFileWithPosAsync(fsClient, fsCmdBlock, dst, size, count, filePos, fileHandle, flag, errorMask, asyncParams.GetPointer());
@@ -1239,6 +1250,8 @@ namespace coreinit
 
 	sint32 FSSetPosFile(FSClient_t* fsClient, FSCmdBlock_t* fsCmdBlock, uint32 fileHandle, uint32 filePos, uint32 errorMask)
 	{
+		if (const auto result = Aroma::ContentRedirection::Seek(fileHandle, filePos))
+			return *result;
 		// used by games: Mario Kart 8
 		StackAllocator<FSAsyncParams, 1> asyncParams;
 		__FSAsyncToSyncInit(fsClient, fsCmdBlock, &asyncParams);
@@ -1271,6 +1284,8 @@ namespace coreinit
 
 	sint32 FSGetPosFile(FSClient_t* fsClient, FSCmdBlock_t* fsCmdBlock, uint32 fileHandle, uint32be* returnedFilePos, uint32 errorMask)
 	{
+		if (const auto result = Aroma::ContentRedirection::Position(fileHandle, returnedFilePos))
+			return *result;
 		StackAllocator<FSAsyncParams, 1> asyncParams;
 		__FSAsyncToSyncInit(fsClient, fsCmdBlock, &asyncParams);
 		sint32 fsAsyncRet = FSGetPosFileAsync(fsClient, fsCmdBlock, fileHandle, returnedFilePos, errorMask, asyncParams.GetPointer());
@@ -1833,6 +1848,8 @@ namespace coreinit
 
 	sint32 FSGetStat(FSClient_t* fsClient, FSCmdBlock_t* fsCmdBlock, const char* path, FSStat_t* statOut, uint32 errorMask)
 	{
+		if (const auto result = Aroma::ContentRedirection::Stat(path, statOut))
+			return *result;
 		StackAllocator<FSAsyncParams, 1> asyncParams;
 		__FSAsyncToSyncInit(fsClient, fsCmdBlock, &asyncParams);
 		sint32 fsAsyncRet = FSGetStatAsync(fsClient, fsCmdBlock, path, statOut, errorMask, &asyncParams);
@@ -1870,6 +1887,8 @@ namespace coreinit
 
 	sint32 FSGetStatFile(FSClient_t* fsClient, FSCmdBlock_t* fsCmdBlock, FSFileHandle2 fileHandle, FSStat_t* statOut, uint32 errorMask)
 	{
+		if (const auto result = Aroma::ContentRedirection::StatFile(fileHandle, statOut))
+			return *result;
 		StackAllocator<FSAsyncParams, 1> asyncParams;
 		__FSAsyncToSyncInit(fsClient, fsCmdBlock, &asyncParams);
 		sint32 fsAsyncRet = FSGetStatFileAsync(fsClient, fsCmdBlock, fileHandle, statOut, errorMask, &asyncParams);

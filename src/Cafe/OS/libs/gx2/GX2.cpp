@@ -1,4 +1,5 @@
 #include "Cafe/OS/common/OSCommon.h"
+#include "Cafe/OS/libs/avm/avm.h"
 #include "Cafe/HW/Latte/ISA/RegDefines.h"
 #include "Cafe/HW/Espresso/PPCCallback.h"
 #include "GX2.h"
@@ -143,13 +144,12 @@ void gx2Export_GX2GetCurrentScanBuffer(PPCInterpreter_t* hCPU)
 
 void coreinitExport_GX2GetSystemTVScanMode(PPCInterpreter_t* hCPU)
 {
-	// 1080p = 7
-	osLib_returnFromFunction(hCPU, 7);
+	osLib_returnFromFunction(hCPU, avm::kTVScanMode);
 }
 
 void coreinitExport_GX2GetSystemTVAspectRatio(PPCInterpreter_t* hCPU)
 {
-	osLib_returnFromFunction(hCPU, 1); // 16:9
+	osLib_returnFromFunction(hCPU, avm::kTVAspectRatio);
 }
 
 void gx2Export_GX2TempGetGPUVersion(PPCInterpreter_t* hCPU)

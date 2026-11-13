@@ -3,6 +3,23 @@
 
 namespace avm
 {
+	bool AVMGetTVAspectRatio(uint32be* aspectRatio)
+	{
+		*aspectRatio = kTVAspectRatio;
+		return true;
+	}
+
+	bool AVMGetTVScanMode(uint32be* scanMode)
+	{
+		*scanMode = kTVScanMode;
+		return true;
+	}
+
+	uint32 TVEGetCurrentPort()
+	{
+		return 0; // HDMI
+	}
+
 	bool AVMIsHDCPAvailable()
 	{
 		return true;
@@ -39,6 +56,8 @@ namespace avm
 
 		void RPLMapped() override
 		{
+			cafeExportRegister("avm", AVMGetTVAspectRatio, LogType::Placeholder);
+			cafeExportRegister("avm", AVMGetTVScanMode, LogType::Placeholder);
 			cafeExportRegister("avm", AVMIsHDCPAvailable, LogType::Placeholder);
 			cafeExportRegister("avm", AVMIsHDCPOn, LogType::Placeholder);
 			cafeExportRegister("avm", AVMGetAnalogContentsProtectionEnable, LogType::Placeholder);
@@ -47,8 +66,24 @@ namespace avm
 		};
 	}s_COSavmModule;
 
+	class : public COSModule
+	{
+	public:
+		std::string_view GetName() override { return "tve"; }
+
+		void RPLMapped() override
+		{
+			cafeExportRegister("tve", TVEGetCurrentPort, LogType::Placeholder);
+		}
+	} s_COStveModule;
+
 	COSModule* GetModule()
 	{
 		return &s_COSavmModule;
+	}
+
+	COSModule* GetTVEModule()
+	{
+		return &s_COStveModule;
 	}
 }

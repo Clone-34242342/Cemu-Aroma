@@ -2,6 +2,12 @@ add_library(CemuCafe
   Account/Account.cpp
   Account/AccountError.h
   Account/Account.h
+  Aroma/ContentRedirection.cpp
+  Aroma/ContentRedirection.h
+  Aroma/WupsImage.cpp
+  Aroma/WupsImage.h
+  Aroma/WupsLoader.cpp
+  Aroma/WupsLoader.h
   CafeSystem.cpp
   CafeSystem.h
   Filesystem/fsc.cpp

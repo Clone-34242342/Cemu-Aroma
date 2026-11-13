@@ -12,16 +12,10 @@ LatteTextureVk::LatteTextureVk(class VulkanRenderer* vkRenderer, Latte::E_DIM di
 	VkImageCreateInfo imageInfo{};
 	imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 	
-	sint32 effectiveBaseWidth = width;
-	sint32 effectiveBaseHeight = height;
-	sint32 effectiveBaseDepth = depth;
-	if (overwriteInfo.hasResolutionOverwrite)
-	{
-		effectiveBaseWidth = overwriteInfo.width;
-		effectiveBaseHeight = overwriteInfo.height;
-		effectiveBaseDepth = overwriteInfo.depth;
-	}
-	effectiveBaseDepth = std::max(1, effectiveBaseDepth);
+	sint32 effectiveBaseWidth, effectiveBaseHeight;
+	GetEffectiveSize(effectiveBaseWidth, effectiveBaseHeight, 0);
+	const sint32 effectiveBaseDepth = std::max(1, static_cast<sint32>(
+		overwriteInfo.hasResolutionOverwrite ? overwriteInfo.depth : depth));
 
 	imageInfo.extent.width = effectiveBaseWidth;
 	imageInfo.extent.height = effectiveBaseHeight;

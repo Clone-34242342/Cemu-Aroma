@@ -1,3 +1,4 @@
+#include "Cafe/Aroma/ContentRedirection.h"
 #include "Common/CafeStaticVar.h"
 #include "fsa_types.h"
 #include "iosu_fsa.h"
@@ -165,6 +166,18 @@ namespace iosu
 		FSCVirtualFile* __FSAOpenNode(FSAClient* client, std::string_view path, FSC_ACCESS_FLAG accessFlags, sint32& fscStatus)
 		{
 			std::string translatedPath = __FSATranslatePath(client, path);
+			if (!HAS_FLAG(accessFlags, FSC_ACCESS_FLAG::WRITE_PERMISSION))
+			{
+				if (auto replacement = Aroma::ContentRedirection::RedirectMergedPath(translatedPath))
+				{
+					if (replacement->empty())
+					{
+						fscStatus = FSC_STATUS_FILE_NOT_FOUND;
+						return nullptr;
+					}
+					translatedPath = std::move(*replacement);
+				}
+			}
 			return fsc_open(translatedPath.c_str(), accessFlags, &fscStatus);
 		}
 

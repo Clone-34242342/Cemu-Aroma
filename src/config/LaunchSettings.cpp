@@ -63,6 +63,8 @@ std::optional<int> LaunchSettings::HandleCommandline(const std::vector<std::wstr
 		("verbose", "Log to stdout")
 #endif
 
+		("aroma-plugin", po::wvalue<std::vector<std::wstring>>()->composing(), "Map an Aroma plugin for guest debugging (repeat in startup order)")
+		("aroma-link-modules", po::wvalue<std::wstring>(), "Link Aroma modules from a directory for guest debugging")
 		("game,g", po::wvalue<std::wstring>(), "Path of game to launch")
 		("title-id,t", po::value<std::string>(), "Title ID of the title to be launched (overridden by --game)")
 		("mlc,m", po::wvalue<std::wstring>(), "Custom mlc folder location")
@@ -136,6 +138,12 @@ std::optional<int> LaunchSettings::HandleCommandline(const std::vector<std::wstr
 
 		if (vm.count("verbose"))
 			s_verbose = true;
+
+		if (vm.count("aroma-plugin"))
+			for (const auto& path : vm["aroma-plugin"].as<std::vector<std::wstring>>())
+				s_aroma_plugin.emplace_back(path);
+		if (vm.count("aroma-link-modules"))
+			s_aroma_module_directory = vm["aroma-link-modules"].as<std::wstring>();
 
 		if (vm.count("game"))
 		{

@@ -206,6 +206,11 @@ namespace coreinit
 		return 0;
 	}
 
+	uint32 OSIsECOMode()
+	{
+		return 0; // Cemu runs titles in normal power mode.
+	}
+
 	uint32 OSGetConsoleType()
 	{
 		return 0x03000050;
@@ -275,6 +280,7 @@ namespace coreinit
 		cafeExportRegister("coreinit", OSGetCoreCount, LogType::CoreinitThread);
 		cafeExportRegister("coreinit", OSIsDebuggerInitialized, LogType::CoreinitThread);
 		cafeExportRegister("coreinit", OSIsDebuggerPresent, LogType::CoreinitThread);
+		cafeExportRegister("coreinit", OSIsECOMode, LogType::Placeholder);
 		cafeExportRegister("coreinit", OSGetConsoleType, LogType::CoreinitThread);
 		cafeExportRegister("coreinit", OSGetMainCoreId, LogType::CoreinitThread);
 		cafeExportRegister("coreinit", OSIsMainCore, LogType::CoreinitThread);
@@ -368,6 +374,7 @@ namespace coreinit
 		{
 			ResetAsyncCallback();
 			ResetFS();
+			coreinit::ShutdownCodeGen();
 			g_coreinitStaticData.Deallocate();
 		}
 

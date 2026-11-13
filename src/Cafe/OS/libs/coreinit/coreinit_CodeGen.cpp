@@ -136,6 +136,14 @@ namespace coreinit
 		return true;
 	}
 
+	void ShutdownCodeGen()
+	{
+		if (coreinitCodeGen.rangeIsAllocated)
+			RPLLoader_FreeCodeSpace(coreinitCodeGen.rangeStart);
+		delete[] coreinitCodeGen.cacheStateCopy;
+		coreinitCodeGen = {};
+	}
+
 	void InitializeCodeGen()
 	{
 		_avoidCodeGenJIT = false;

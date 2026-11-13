@@ -9,6 +9,7 @@
 #include "Cafe/OS/libs/coreinit/coreinit_MEM.h"
 #include "Cafe/OS/libs/coreinit/coreinit_FG.h"
 #include "Cafe/CafeSystem.h"
+#include "Cafe/Aroma/WupsLoader.h"
 #include "Cafe/GraphicPack/GraphicPack2.h"
 
 extern MPTR _entryPoint;
@@ -191,6 +192,7 @@ MPTR CoreInitEntry(sint32 argc, MPTR argv)
 	void* dummyAlloc = coreinit::OSDynLoad_AllocatorAlloc(0x500, 0x4);
 	if (dummyAlloc)
 		coreinit::OSDynLoad_AllocatorFree(dummyAlloc);
+	Aroma::StartPlugin();
 	return _entryPoint;
 }
 
