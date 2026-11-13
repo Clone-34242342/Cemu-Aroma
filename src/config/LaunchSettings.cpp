@@ -17,6 +17,25 @@
 
 void requireConsole();
 
+fs::path LaunchSettings::AromaEnvironmentDirectory()
+{
+	return ActiveSettings::GetUserDataPath("sdcard/wiiu/environments/aroma");
+}
+
+std::optional<fs::path> LaunchSettings::AromaModuleDirectory()
+{
+	if (s_aroma_module_directory)
+		return s_aroma_module_directory;
+	if (GetConfig().enable_aroma)
+		return AromaEnvironmentDirectory() / "modules";
+	return std::nullopt;
+}
+
+bool LaunchSettings::AromaEnabled()
+{
+	return s_aroma_module_directory.has_value() || !AromaPlugins().empty() || GetConfig().enable_aroma;
+}
+
 std::optional<int> LaunchSettings::HandleCommandline(const wchar_t* lpCmdLine)
 {
 	#if BOOST_OS_WINDOWS

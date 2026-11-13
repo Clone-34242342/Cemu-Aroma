@@ -415,6 +415,7 @@ struct CemuConfig
 #else
 #define DISABLE_SCREENSAVER_DEFAULT true
 #endif
+	ConfigValue<bool> enable_aroma{false};
 	ConfigValue<bool> disable_screensaver{DISABLE_SCREENSAVER_DEFAULT};
 #undef DISABLE_SCREENSAVER_DEFAULT
 	ConfigValue<bool> play_boot_sound{false};

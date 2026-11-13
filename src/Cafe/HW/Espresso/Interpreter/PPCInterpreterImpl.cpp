@@ -1,5 +1,7 @@
 #include "PPCInterpreterInternal.h"
 #include "PPCInterpreterHelper.h"
+#include "Cafe/OS/libs/coreinit/coreinit_Thread.h"
+#include "config/LaunchSettings.h"
 #include "Cafe/HW/Espresso/Debugger/Debugger.h"
 #include "Cafe/HW/Espresso/Debugger/GDBStub.h"
 

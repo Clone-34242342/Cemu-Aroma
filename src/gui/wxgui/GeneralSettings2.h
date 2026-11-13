@@ -51,6 +51,7 @@ private:
 	wxChoice * m_language;
 	wxCheckBox* m_save_window_position_size;
 	wxCheckBox* m_save_padwindow_position_size;
+	wxCheckBox* m_enable_aroma;
 	wxCheckBox* m_discord_presence, *m_fullscreen_menubar;
 	wxCheckBox* m_auto_update, *m_receive_untested_releases, *m_save_screenshot;
 	wxCheckBox* m_disable_screensaver;

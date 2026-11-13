@@ -14,6 +14,7 @@
 #include "util/crypto/crc32.h"
 #include "config/ActiveSettings.h"
 #include "Cafe/OS/libs/coreinit/coreinit_DynLoad.h"
+#include "Cafe/OS/libs/coreinit/coreinit_Misc.h"
 #include "COSModule.h"
 
 class PPCCodeHeap : public VHeap
@@ -786,9 +787,24 @@ uint32 rpl_mapHLEImport(RPLModule* rplLoaderContext, const char* rplName, const 
 	sint32 functionIndex = osLib_getFunctionIndex(libName, funcName);
 	if (functionIndex >= 0)
 	{
+		if (std::string_view(libName) == "coreinit" && LaunchSettings::AromaModuleDirectory() &&
+			std::string_view(funcName) == "OSGetUPID")
+		{
+			// FunctionPatcher copies the first two retail instructions to read
+			// the process ID in its generated process-filtering trampolines.
+			const uint32 entry = memory_getVirtualOffsetFromPointer(RPLLoader_AllocateTrampolineCodeSpace(16));
+			const uint32 processId = entry + 12;
+			memory_write<uint32>(processId, coreinit::OSGetUPID());
+			memory_write<uint32>(entry, 0x3c600000 | ((processId + 0x8000) >> 16));
+			memory_write<uint32>(entry + 4, 0x80630000 | (processId & 0xffff));
+			memory_write<uint32>(entry + 8, 0x4e800020);
+			list_mappedFunctionImports.push_back({mappedImportHash1, mappedImportHash2, entry});
+			rplSymbolStorage_store(libName, funcName, entry);
+			return entry;
+		}
 		uint32 patchOffset = 0;
 		uint32 patchInstruction = 0;
-		if ((LaunchSettings::AromaModuleDirectory() || !LaunchSettings::AromaPlugins().empty()) &&
+		if (LaunchSettings::AromaEnabled() &&
 			std::string_view(libName) == "coreinit")
 		{
 			// Some plugins inspect and patch the retail loader's permission
@@ -1616,6 +1632,15 @@ RPLModule* RPLLoader_LoadFromMemory(uint8* rplData, sint32 size, std::string_vie
 		delete rpl;
 		return nullptr;
 	}
+	// Preserve the executable basename in guest notifications. Internal
+	// module lookup remains case-insensitive.
+	if (rpl->IsRPX())
+	{
+		const auto separator = name.find_last_of("/\\");
+		const auto basename = name.substr(separator == std::string_view::npos ? 0 : separator + 1);
+		if (basename.size() == std::strlen(rpl->ppcName.GetPtr()))
+			memcpy(rpl->ppcName.GetPtr(), basename.data(), basename.size());
+	}
 	RPLLoader_InitModuleAllocator(rpl);
 	RPLLoader_BeginCemuhookCRC(rpl);
 	if (RPLLoader_LoadSections(0, rpl) == false)
@@ -1951,7 +1976,7 @@ bool RPLLoader_IsKnownCafeOSModule(std::string_view name)
 COSModule* RPLLoader_GetHLECafeOSModule(std::string_view moduleName)
 {
 	if ((moduleName == "homebrew_content_redirection" || moduleName == "homebrew_curlwrapper") &&
-		LaunchSettings::AromaPlugins().empty())
+		!LaunchSettings::AromaEnabled())
 		return nullptr;
 	std::span<COSModule*> cosModules = GetCOSModules();
 	for (auto& module : cosModules)
@@ -2508,7 +2533,7 @@ SimpleHeap<uint32, uint32> heapCodeCaveArea(MEMORY_CODECAVEAREA_ADDR, MEMORY_COD
 
 MEMPTR<void> RPLLoader_AllocateCodeCaveMem(uint32 alignment, uint32 size)
 {
-	uint32 addr = heapCodeCaveArea.alloc(size, 256);
+	uint32 addr = heapCodeCaveArea.alloc(size, std::max(alignment, 256u));
 	return MEMPTR<void>{addr};
 }
 

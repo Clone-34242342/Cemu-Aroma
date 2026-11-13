@@ -2,6 +2,7 @@
 #include "Cafe/HW/Espresso/Interpreter/PPCInterpreterHelper.h"
 #include "Cafe/HW/Espresso/EspressoISA.h"
 #include "PPCRecompiler.h"
+#include "config/LaunchSettings.h"
 #include "PPCRecompilerIml.h"
 #include "IML/IML.h"
 #include "IML/IMLRegisterAllocatorRanges.h"
@@ -2500,6 +2501,11 @@ bool PPCRecompiler_decodePPCInstruction(ppcImlGenContext_t* ppcImlGenContext)
 		}
 		break;
 	case 32: // LWZ
+		if ((opcode & 0xfc1fffff) == 0x8000ffe0 && LaunchSettings::AromaEnabled())
+		{
+			unsupportedInstructionFound = true;
+			break;
+		}
 		if(!PPCRecompilerImlGen_LOAD(ppcImlGenContext, opcode, 32, false, true, false))
 			unsupportedInstructionFound = true;
 		break;

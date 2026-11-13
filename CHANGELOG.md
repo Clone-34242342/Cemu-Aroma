@@ -4,6 +4,8 @@ This log tracks changes made in the fork since upstream Cemu commit `3b103161`. 
 
 ## Unreleased
 
+- Added an Aroma toggle and plugin folder shortcut in General Settings. When enabled, Cemu loads modules and discovers plugins from the emulated SD card at title startup.
+
 ### November 12, 2026 · Aroma plugin support
 
 Fork commit `e5cd8c85`.
@@ -18,7 +20,7 @@ Fork commit `e5cd8c85`.
 - Fixed Vulkan rectangle shader interface mismatches, minimum texture dimensions during uploads and barriers that needed to run outside a render pass. Also synchronized the recompiler’s data-cache flush queue.
 - Fixed VPAD reads for an absent controller overwriting the caller’s previous sample. YouTube now retains the GamePad input when it polls a second channel. GiveMiiYouTube’s callback, guest search and changing video frames on both screens were verified in a Linux Vulkan interpreter session.
 
-**Open compatibility issues.** The original Aroma settings menu has yet to open in Cemu. The captured retail modules reach MemoryMapping initialization, where the tested launches faulted. WUPS settings registration and writes remain incomplete. YouTube has stalled at startup under the recompiler, and one desktop session reported frozen video with audible playback. Linux results are documented in the [Aroma implementation notes](README-AROMA.md) and [validation guide](docs/VALIDATION.md).
+**Open compatibility issues.** The original Aroma settings menu now opens in the empty-plugin Wii Street U test described below. Native plugin loading through PluginBackend still needs work. WUPS settings registration and writes remain incomplete. YouTube has stalled at startup under the recompiler, and one desktop session reported frozen video with audible playback. Linux results are documented in the [Aroma implementation notes](README-AROMA.md) and [validation guide](docs/VALIDATION.md).
 
 ### November 8–12, 2026 · Python debugger
 
@@ -27,3 +29,19 @@ Fork commit `e5cd8c85`.
 - Rejected oversized addresses before guest memory access. Serialized multicore breakpoint handling and checked repeated watchpoint delivery. Fixed cache invalidation across disjoint translated ranges after code writes. (`47eab6b8`, `4b96dc87`, `4fbef3d1`)
 - Kept debugger requests synchronized when a breakpoint stop races a pause request. Enabled Linux process inspection when the debugger listener starts and exposed the checked paired-single PS1 register lane. (`d91aed41`, `7393b112`, `8e96cded`)
 - Documented raw PC redirection limits, watchpoint constraints and the need to wait for patched code to execute before measuring results. Linux live checks used Mario Kart 8 US v81. See the [Python debugger guide](README-PYTHON.md). (`1ec2ee90`)
+
+### November 13, 2026 · Aroma settings startup
+
+- Added Cemu-backed mapped-memory exports for Aroma and placed FunctionPatcher’s writable trampoline storage in low guest memory. Wii Street U now reaches PluginBackend initialization. The test then faulted in a generated trampoline, before the settings shortcut could be tested. PluginBackend also reported the optional IOPShell module absent.
+- Made the Aroma-mode `OSGetUPID` export start with the same PowerPC instruction pattern as retail coreinit. FunctionPatcher copies those two instructions into its process filters. The original PluginBackend now completes startup with an empty plugin directory. Verified that D-pad Down + Minus + L opens the original settings menu in Wii Street U. The guest input hook received mask `0x124` and PluginBackend v0.4.1 drew its menu in a hidden, muted Vulkan run. The menu reported no plugins available. That initial SD Cafiine crash was fixed in the follow-up below. [GamePad capture](docs/images/aroma-config-wii-street-u.png)
+
+### Native plugin loading and SD Cafiine
+
+- Enabled content redirection and curl compatibility for Aroma module launches. Fixed x64 recompiler dispatch to Aroma code outside its normal executable range by falling back to the interpreter. The real backend loaded SD Cafiine and Wii Street U Revival, SD Cafiine mounted the test modpack, and the original Aroma menu displayed Revival's settings.
+- Fixed clipped SD Cafiine text by honoring the OSScreen text origin and clipping glyphs to the framebuffer. Verified Minus changes and persists the single-modpack autostart option in the selector. Added GamePad flip pacing for the automatic preparation countdown. Opening the selector with Minus during that countdown remains unverified.
+
+### Inkay compatibility
+
+- Added Aroma-mode support for the legacy Cafe OS current-thread load used by Inkay v3.0.0's WMS module and WPS plugin. The recompiler hands that instruction to the interpreter so it reads the current emulated thread on the executing core.
+- Verified that both Inkay components get past their thread initialization and Mario Kart 8 US v81 starts with audio. Cemu was set to Nintendo. Its account request still reached Nintendo and returned error 106. Inkay's Mocha initialization reported that `/dev/iosuhax` is missing, and its game patches reported that `Turbo.rpx` could not be found through module enumeration. Pretendo login remains unverified.
+- Preserved the main executable's original filename in guest module notifications. Inkay v3.0.0 could then find `Turbo.rpx` in Mario Kart 8 US v81. This verifies the executable lookup independently of Inkay's IOSU network redirection.

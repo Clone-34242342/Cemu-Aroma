@@ -181,13 +181,14 @@ bool PPCRecompilerX64Gen_imlInstruction_macro(PPCRecFunction_t* PPCRecFunction, 
 		uint32 branchDstReg = _reg32(imlInstruction->op_macro.paramReg);
 		if(X86_REG_RDX != branchDstReg)
 			x64Gen_mov_reg64_reg64(x64GenContext, X86_REG_RDX, branchDstReg);
-		// potential optimization: Use branchDstReg directly if possible instead of moving to RDX/EDX
-		// JMP [offset+RDX*(8/4)+R15]
-		x64Gen_writeU8(x64GenContext, 0x41);
-		x64Gen_writeU8(x64GenContext, 0xFF);
-		x64Gen_writeU8(x64GenContext, 0xA4);
-		x64Gen_writeU8(x64GenContext, 0x57);
-		x64Gen_writeU32(x64GenContext, (uint32)offsetof(PPCRecompilerInstanceData_t, ppcRecompilerDirectJumpTable));
+		// Aroma can execute guest code in mapped data memory outside the
+		// recompiler table. Keep the real PC in EDX when falling back.
+		x64Gen_xor_reg32_reg32(x64GenContext, X86_REG_RAX, X86_REG_RAX);
+		x64Gen_cmp_reg64Low32_imm32(x64GenContext, X86_REG_RDX, PPC_REC_CODE_AREA_END);
+		x64Gen_cmovcc_reg64Low32_reg64Low32(x64GenContext, X86_CONDITION_CARRY, X86_REG_RAX, X86_REG_RDX);
+		x64Gen_add_reg64_reg64(x64GenContext, X86_REG_RAX, X86_REG_RAX);
+		x64Gen_add_reg64_reg64(x64GenContext, X86_REG_RAX, REG_RESV_RECDATA);
+		x64Gen_jmp_memReg64(x64GenContext, X86_REG_RAX, (uint32)offsetof(PPCRecompilerInstanceData_t, ppcRecompilerDirectJumpTable));
 		return true;
 	}
 	else if( imlInstruction->operation == IMLOperation::MACRO_BL )
@@ -311,6 +312,9 @@ bool PPCRecompilerX64Gen_imlInstruction_macro(PPCRecFunction_t* PPCRecFunction, 
 		x64Emit_mov_reg64_mem32(x64GenContext, X86_REG_RAX, REG_RESV_HCPU, offsetof(PPCInterpreter_t, instructionPointer));
 		// remember instruction pointer in REG_EDX
 		x64Gen_mov_reg64_reg64(x64GenContext, X86_REG_RDX, X86_REG_RAX);
+		x64Gen_xor_reg32_reg32(x64GenContext, X86_REG_RAX, X86_REG_RAX);
+		x64Gen_cmp_reg64Low32_imm32(x64GenContext, X86_REG_RDX, PPC_REC_CODE_AREA_END);
+		x64Gen_cmovcc_reg64Low32_reg64Low32(x64GenContext, X86_CONDITION_CARRY, X86_REG_RAX, X86_REG_RDX);
 		// EAX *= 2
 		x64Gen_add_reg64_reg64(x64GenContext, X86_REG_RAX, X86_REG_RAX);
 		// ADD RAX, REG_RESV_RECDATA

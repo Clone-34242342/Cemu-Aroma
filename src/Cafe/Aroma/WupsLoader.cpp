@@ -58,6 +58,7 @@ struct Hook
 
 std::vector<Hook> s_hooks;
 std::vector<MPTR> s_codeAllocations;
+std::vector<MEMPTR<void>> s_lowDataAllocations;
 enum class ModuleHookType : uint32
 {
 	InitMalloc = 0,
@@ -250,23 +251,45 @@ constexpr AllocatorImport kAllocatorImports[] = {
 };
 CafeStaticVar<uint32be, std::size(kAllocatorImports)> s_allocatorSlots{coreinit::g_coreinitStaticData};
 
-// The fork's OSScreen uses guest RAM directly. Its screen buffers can use
-// the dedicated Aroma heap without the console's additional GX2 mapping.
-CafeStaticVar<uint32be, 2> s_screenAllocatorSlots{coreinit::g_coreinitStaticData};
-
-uint32 ResolveScreenAllocator(std::string_view symbol)
+// Cemu already provides a flat guest address space. Use its Aroma heap
+// instead of running the console kernel's BAT and page-table patches.
+void PluginAllocMapped(PPCInterpreter_t* cpu)
 {
-	uint32be* slot = s_screenAllocatorSlots.GetPtr();
-	if (symbol == "MEMAllocFromMappedMemoryForGX2Ex")
-		*slot = RPLLoader_MakePPCCallable(PluginAllocAligned);
-	else if (symbol == "MEMFreeToMappedMemory")
+	PluginAlloc(cpu, 4);
+}
+
+void TranslateMappedAddress(PPCInterpreter_t* cpu)
+{
+	const auto address = cpu->gpr[3];
+	osLib_returnFromFunction(cpu, memory_isAddressRangeAccessible(address, 1) ? address : 0);
+}
+
+constexpr AllocatorImport kMappedImports[] = {
+	{"MEMAllocFromMappedMemory", PluginAllocMapped},
+	{"MEMAllocFromMappedMemoryEx", PluginAllocAligned},
+	{"MEMAllocFromMappedMemoryForGX2Ex", PluginAllocAligned},
+	{"MEMFreeToMappedMemory", PluginFree},
+};
+CafeStaticVar<uint32be, std::size(kMappedImports)> s_mappedAllocatorSlots{coreinit::g_coreinitStaticData};
+
+uint32 ResolveMappedMemory(std::string_view symbol, bool isData)
+{
+	if (!isData)
 	{
-		++slot;
-		*slot = RPLLoader_MakePPCCallable(PluginFree);
-	}
-	else
+		if (symbol == "MemoryMappingEffectiveToPhysical" || symbol == "MemoryMappingPhysicalToEffective")
+			return RPLLoader_MakePPCCallable(TranslateMappedAddress);
 		return 0;
-	return memory_getVirtualOffsetFromPointer(slot);
+	}
+	for (size_t i = 0; i < std::size(kMappedImports); ++i)
+	{
+		if (symbol == kMappedImports[i].name)
+		{
+			auto* slot = s_mappedAllocatorSlots.GetPtr() + i;
+			*slot = RPLLoader_MakePPCCallable(kMappedImports[i].entry);
+			return memory_getVirtualOffsetFromPointer(slot);
+		}
+	}
+	return 0;
 }
 
 using StorageBooleans = std::unordered_map<std::string, bool>;
@@ -443,7 +466,7 @@ bool AddCafeDependencies(const WupsImage& image)
 	return added;
 }
 
-ImagePlacement AllocateImage(const WupsImage& image)
+ImagePlacement AllocateImage(const WupsImage& image, bool needsLowData = false)
 {
 	ImagePlacement placement;
 	auto& code = placement.code;
@@ -469,7 +492,17 @@ ImagePlacement AllocateImage(const WupsImage& image)
 	placement.stubOffset = (code.size + 3) & ~3u;
 	code.guestBase = RPLLoader_AllocateCodeSpace(placement.stubOffset + kBranchStubCapacity, code.alignment);
 	s_codeAllocations.push_back(code.guestBase);
-	data.guestBase = RPLLoader_AllocateBootDataSpace(data.size, data.alignment);
+	if (needsLowData)
+	{
+		// FunctionPatcher emits absolute branches to trampolines stored in .data.
+		const auto allocation = RPLLoader_AllocateCodeCaveMem(data.alignment, data.size);
+		if (!allocation)
+			throw std::runtime_error("Could not allocate low memory for Aroma function trampolines");
+		s_lowDataAllocations.push_back(allocation);
+		data.guestBase = allocation.GetMPTR();
+	}
+	else
+		data.guestBase = RPLLoader_AllocateBootDataSpace(data.size, data.alignment);
 
 	auto& addresses = placement.addresses;
 	addresses.resize(segments.size());
@@ -544,12 +577,19 @@ void LinkModules(const fs::path& directory)
 		auto metadata = image.ReadModuleMetadata();
 		if (!names.insert(metadata.exportName).second)
 			throw std::runtime_error("Duplicate WUMS module " + metadata.exportName);
-		auto placement = AllocateImage(image);
+		auto placement = AllocateImage(image, metadata.exportName == "homebrew_functionpatcher");
 		auto declarations = image.ReadModuleDeclarations(placement.addresses);
 		addedCafeDependencies |= AddCafeDependencies(image);
 		for (const auto& entry : declarations.exports)
 		{
-			if (!exports.emplace(ExportKey(metadata.exportName, entry.name, entry.isData), entry.address).second)
+			auto address = entry.address;
+			if (metadata.exportName == "homebrew_memorymapping")
+			{
+				address = ResolveMappedMemory(entry.name, entry.isData);
+				if (!address)
+					throw std::runtime_error("Unsupported Aroma memory mapping export " + entry.name);
+			}
+			if (!exports.emplace(ExportKey(metadata.exportName, entry.name, entry.isData), address).second)
 				throw std::runtime_error("Duplicate WUMS export " + metadata.exportName + ":" + entry.name);
 		}
 		modules.push_back({std::move(image), std::move(placement), std::move(metadata), std::move(declarations.hooks), {}});
@@ -707,7 +747,9 @@ void LinkModules(const fs::path& directory)
 				}
 			}
 		}
-		if (canDispatch && !module->hooks.empty())
+		if (canDispatch && module->metadata.exportName == "homebrew_memorymapping")
+			cemuLog_log(LogType::Force, "WUMS: Using Cemu mapped-memory services for homebrew_memorymapping");
+		else if (canDispatch && !module->hooks.empty())
 			s_moduleHooks.push_back({module->metadata.exportName, module->hooks, module->metadata.skipInitFini,
 				module->metadata.initBeforeRelocationsDone});
 		if (canDispatch)
@@ -717,7 +759,7 @@ void LinkModules(const fs::path& directory)
 	}
 	if (!canDispatch)
 		cemuLog_log(LogType::Force, "WUMS: Guest hooks require module runtime initialization");
-	if (!s_moduleHooks.empty() && !s_pluginHeapAddress)
+	if (canDispatch && !s_pluginHeapAddress)
 		s_pluginHeapAddress = RPLLoader_AllocateBootDataSpace(kPluginHeapSize, 0x1000);
 	if (canDispatch)
 		s_moduleExports = std::move(exports);
@@ -842,7 +884,7 @@ void MapPlugin(const fs::path& path)
 			return address;
 		if (isData && library == "homebrew_memorymapping")
 		{
-			if (const auto address = ResolveScreenAllocator(symbol))
+			if (const auto address = ResolveMappedMemory(symbol, isData))
 				return address;
 		}
 		if (!isData && library == "homebrew_kernel" && symbol == "KernelCopyData")
@@ -1056,6 +1098,9 @@ void ResetPlugin()
 	for (const auto address : s_codeAllocations)
 		RPLLoader_FreeCodeSpace(address);
 	s_codeAllocations.clear();
+	for (const auto address : s_lowDataAllocations)
+		RPLLoader_ReleaseCodeCaveMem(address);
+	s_lowDataAllocations.clear();
 	s_moduleHooks.clear();
 	s_moduleExports.clear();
 	s_moduleNames.clear();

@@ -1,5 +1,14 @@
 # Aroma plugin execution in Cemu
 
+## Enable Aroma from the GUI
+
+With the title closed, open **Options → General settings → General** and enable
+**Aroma plugins**. Cemu loads `.wms` files from
+`sdcard/wiiu/environments/aroma/modules/` at title startup. Put `.wps` files
+in the neighboring `plugins/` folder. **Open plugins folder** takes you
+there. The module set must include PluginBackend for SD plugin discovery.
+Command-line module and plugin options remain available for debugging.
+
 ## Run Wii Street U Revival
 
 Use a Wii Street U title with its Revival content prepared, and pass the actual
@@ -825,3 +834,45 @@ changed. This run did not establish why the pre-roll picture stalled or
 why the desktop session reported frozen video with audible playback.
 The recompiled startup stall also remains unexplained.
 See `aroma-module-link-check/youtube-video-playback.log`.
+
+## Settings menu startup follow-up
+
+The upstream MemoryMapping module uses hardware BAT and page-table setup
+before creating its heaps. Cemu uses a flat guest address space. The fork
+now supplies the module's allocator and address-translation exports through
+Cemu's existing Aroma heap and memory mapping. The original hardware
+initialization hooks are skipped for this module.
+
+FunctionPatcher stores its generated branch trampolines in its data
+segment and targets them with absolute PowerPC branches. The fork now
+places that module's data in the low guest code cave. A separate, muted
+Wii Street U run with the captured WMS modules advanced through both
+earlier failures and reached PluginBackend initialization. PluginBackend
+reported that IOPShell was absent. Its source continues to register the
+static hooks after that optional service fails. The next observed fault
+was at guest PC `0x01806dc4` in low trampoline storage, with LR
+`0x037cb520` in PluginBackend. The run did not reach an interactive title
+or verify the menu shortcut.
+
+The dumped retail coreinit `OSGetUPID` starts with `lis r3,0x1001`
+and `lwz r3,0x3c20(r3)`. FunctionPatcher copies their immediate operands
+into a corresponding r11 load in its process-filter trampoline. Cemu
+previously supplied a single HLE opcode at this export, so the copied
+operands did not name a process-ID word. The Aroma-mode export now
+starts with a retail-shaped load of Cemu's process ID. In the next
+hidden Vulkan run the same trampoline at `0x01806dc0` loaded the word
+at `0x00e06db4` and filtered process IDs 2 and 15. PluginBackend
+completed startup and Wii Street U reached its splash. With SD Cafiine
+in the native backend's plugin directory, a separate run logged
+`LOAD (ACTIVE) SDCafiine` and faulted at `0x126726cc`. With an
+empty directory the shortcut attempt did not visibly open the menu.
+
+
+A corrected keyboard-backed GamePad profile sent D-pad Down, Minus and
+L together in the isolated Wii Street U session. A breakpoint at the
+real PluginBackend VPAD comparison recorded mask `0x124`. After the
+debugger detached, the GamePad displayed **Wii U Plugin System Config
+Menu v0.4.1**. The session used Xvfb, Vulkan and zero TV/GamePad volume.
+The native backend's plugin directory was empty, so this verifies menu
+entry and rendering. Native plugin registration and settings changes
+remain unverified. [GamePad capture](docs/images/aroma-config-wii-street-u.png)

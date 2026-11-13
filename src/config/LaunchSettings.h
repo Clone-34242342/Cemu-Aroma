@@ -17,7 +17,9 @@ public:
 	static std::optional<int> HandleCommandline(const std::vector<std::wstring>& args);
 
 	static const std::vector<fs::path>& AromaPlugins() { return s_aroma_plugin; }
-	static const std::optional<fs::path>& AromaModuleDirectory() { return s_aroma_module_directory; }
+	static fs::path AromaEnvironmentDirectory();
+	static std::optional<fs::path> AromaModuleDirectory();
+	static bool AromaEnabled();
 	static std::optional<fs::path> GetLoadFile() { return s_load_game_file; }
 	static std::optional<uint64> GetLoadTitleID() {return s_load_title_id;}
 	static std::optional<fs::path> GetMLCPath() { return s_mlc_path; }

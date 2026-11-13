@@ -1518,7 +1518,7 @@ namespace nlibcurl
 
 		void RPLMapped() override
 		{
-			if (LaunchSettings::AromaPlugins().empty())
+			if (!LaunchSettings::AromaEnabled())
 				return;
 			const auto version = std::string_view(::curl_version()).substr(0, 255);
 			memcpy(s_aromaCurlVersion.GetPtr(), version.data(), version.size());

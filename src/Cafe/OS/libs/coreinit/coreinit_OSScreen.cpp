@@ -5,6 +5,8 @@
 #include "Cafe/OS/libs/coreinit/coreinit_OSScreen_font.h"
 #include "Cafe/OS/libs/coreinit/coreinit_OSScreen.h"
 #include "Cafe/OS/libs/coreinit/coreinit.h"
+#include "Cafe/OS/libs/coreinit/coreinit_Thread.h"
+#include "config/LaunchSettings.h"
 
 namespace coreinit
 {
@@ -104,6 +106,10 @@ namespace coreinit
 		cemu_assert(screenIndex < 2);
 		LatteGPUState.osScreen.screen[screenIndex].flipRequestCount++;
 		_updateCurrentDrawScreen(screenIndex);
+		// Aroma startup menus count frames using paired OSScreen flips.
+		// Pace the GamePad flip so their input windows last at display speed.
+		if (screenIndex == 1 && LaunchSettings::AromaEnabled())
+			OSSleepTicks(ESPRESSO_TIMER_CLOCK / 60);
 	}
 
 	void OSScreenPutPixelEx(uint32 screenIndex, sint32 x, sint32 y, uint32 color)
@@ -138,15 +144,18 @@ namespace coreinit
 		// 16 x 32 (including the margin)
 		// with a margin of 4 x 8
 
-		if (y < 0)
-		{
-			debug_printf("OSScreenPutFontEx: y has invalid value\n");
+		if (screenIndex >= std::size(screenSizes) || !currentScreenBasePtr[screenIndex] || !str)
 			return;
-		}
 
-		sint32 px = x * 16;
-		sint32 py = y * 24;
-		sint32 initialPx = px;
+		const auto& screen = screenSizes[screenIndex];
+		// Leave room for the conventional (-2, -1) OSScreen title position
+		// used by SD Cafiine on the console.
+		const sint64 originX = 32;
+		const sint64 originY = 24;
+		sint64 px = originX + sint64(x) * 16;
+		sint64 py = originY + sint64(y) * 24;
+		const sint64 initialPx = px;
+		auto* output = static_cast<uint32*>(currentScreenBasePtr[screenIndex]);
 
 		while (*str)
 		{
@@ -167,7 +176,10 @@ namespace coreinit
 					{
 						if (((charBitmap[(fx / 8) + (fy) * 2] >> (7 - (fx & 7))) & 1) == 0)
 							continue;
-						*(uint32*)((uint8*)currentScreenBasePtr[screenIndex] + ((px + fx) + (py + fy) * screenSizes[screenIndex].pitch) * 4) = 0xFFFFFFFF;
+						const auto destX = px + fx;
+						const auto destY = py + fy;
+						if (destX >= 0 && destX < screen.x && destY >= 0 && destY < screen.y)
+							output[destY * screen.pitch + destX] = 0xFFFFFFFF;
 					}
 				}
 			}

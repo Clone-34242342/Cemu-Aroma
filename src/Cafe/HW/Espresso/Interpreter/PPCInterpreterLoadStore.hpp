@@ -282,6 +282,13 @@ static void PPCInterpreter_LWZ(PPCInterpreter_t* hCPU, uint32 Opcode)
 	sint32 rA, rD;
 	uint32 imm;
 	PPC_OPC_TEMPL_D_SImm(Opcode, rD, rA, imm);
+	// Older WUPS and WUMS runtimes read Cafe OS's current-thread word directly.
+	if (rA == 0 && imm == 0xffffffe0 && LaunchSettings::AromaEnabled())
+	{
+		hCPU->gpr[rD] = memory_getVirtualOffsetFromPointer(coreinit::OSGetCurrentThread());
+		PPCInterpreter_nextInstruction(hCPU);
+		return;
+	}
 	uint32 v = ppcItpCtrl::ppcMem_readDataU32(hCPU, (rA ? hCPU->gpr[rA] : 0) + imm);
 	DSI_EXIT();
 	hCPU->gpr[rD] = v;

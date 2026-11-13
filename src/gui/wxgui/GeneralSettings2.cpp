@@ -14,6 +14,7 @@
 #include <wx/textctrl.h>
 #include <wx/textdlg.h>
 #include <wx/hyperlink.h>
+#include <wx/utils.h>
 
 #include "config/CemuConfig.h"
 #include "config/NetworkSettings.h"
@@ -276,6 +277,26 @@ wxPanel* GeneralSettings2::AddGeneralPage(wxNotebook* notebook)
 		}
 
 		general_panel_sizer->Add(box_sizer, 0, wxEXPAND | wxALL, 5);
+	}
+
+	{
+		auto* aromaBox = new wxStaticBoxSizer(wxHORIZONTAL, panel, _("Aroma"));
+		auto* box = aromaBox->GetStaticBox();
+		m_enable_aroma = new wxCheckBox(box, wxID_ANY, _("Enable Aroma plugins"));
+		m_enable_aroma->SetToolTip(_("Load Aroma modules and plugins from the emulated SD card when starting a title."));
+		aromaBox->Add(m_enable_aroma, 0, wxALL | wxALIGN_CENTER_VERTICAL, 5);
+
+		auto* openPlugins = new wxButton(box, wxID_ANY, _("Open plugins folder"));
+		openPlugins->Bind(wxEVT_BUTTON, [this](wxCommandEvent&)
+		{
+			const auto folder = LaunchSettings::AromaEnvironmentDirectory() / "plugins";
+			std::error_code error;
+			fs::create_directories(folder, error);
+			if (error || !wxLaunchDefaultApplication(wxHelper::FromPath(folder)))
+				wxMessageBox(_("Could not open the Aroma plugins folder."), _("Error"), wxOK | wxICON_ERROR, this);
+		});
+		aromaBox->Add(openPlugins, 0, wxALL | wxALIGN_CENTER_VERTICAL, 5);
+		general_panel_sizer->Add(aromaBox, 0, wxEXPAND | wxALL, 5);
 	}
 
 	{
@@ -1133,6 +1154,7 @@ void GeneralSettings2::StoreConfig()
 	wxGuiConfig.msw_theme = m_msw_theme->GetSelection();
 #endif
 	config.play_boot_sound = m_play_boot_sound->IsChecked();
+	config.enable_aroma = m_enable_aroma->IsChecked();
 	config.disable_screensaver = m_disable_screensaver->IsChecked();
 	// toggle while a game is running
 	if (CafeSystem::IsTitleRunning())
@@ -1332,6 +1354,8 @@ void GeneralSettings2::DisableSettings(bool game_launched)
 {
 	if (game_launched)
 	{
+		m_enable_aroma->Disable();
+		m_enable_aroma->SetToolTip(_("Close the running title before changing Aroma settings."));
 		m_graphic_api->Disable();
 		m_graphic_api->SetToolTip(_("Graphics API cannot be changed while a title is running"));
 		m_graphic_device->Disable();
@@ -1891,6 +1915,7 @@ void GeneralSettings2::ApplyConfig()
 	m_receive_untested_releases->SetValue(wxGUIconfig.receive_untested_updates);
 	m_save_screenshot->SetValue(wxGUIconfig.save_screenshot);
 
+	m_enable_aroma->SetValue(config.enable_aroma);
 	m_disable_screensaver->SetValue(config.disable_screensaver);
 	m_play_boot_sound->SetValue(config.play_boot_sound);
 #if BOOST_OS_WINDOWS

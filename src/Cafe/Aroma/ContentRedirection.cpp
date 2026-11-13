@@ -164,7 +164,7 @@ sint32 CRSetActive(uint32 handle, bool active)
 
 std::optional<std::pair<GuestDevice, std::string>> Resolve(const char* path)
 {
-	if (!path || LaunchSettings::AromaPlugins().empty())
+	if (!path || !LaunchSettings::AromaEnabled())
 		return std::nullopt;
 	std::lock_guard lock(s_mutex);
 	const std::string_view requested(path);
@@ -187,7 +187,7 @@ std::optional<std::pair<GuestDevice, std::string>> Resolve(const char* path)
 
 std::optional<File> FindFile(uint32 handle)
 {
-	if (LaunchSettings::AromaPlugins().empty())
+	if (!LaunchSettings::AromaEnabled())
 		return std::nullopt;
 	std::lock_guard lock(s_mutex);
 	const auto file = s_files.find(handle);
@@ -223,7 +223,7 @@ public:
 	std::string_view GetName() override { return "homebrew_content_redirection"; }
 	void RPLMapped() override
 	{
-		if (LaunchSettings::AromaPlugins().empty())
+		if (!LaunchSettings::AromaEnabled())
 			return;
 		cafeExportRegister("homebrew_content_redirection", CRGetVersion, LogType::Placeholder);
 		cafeExportRegister("homebrew_content_redirection", CRAddDeviceABI, LogType::Placeholder);
@@ -254,7 +254,7 @@ COSModule* GetModule()
 std::optional<std::string> RedirectMergedPath(std::string_view path)
 {
 	constexpr std::string_view target = "/vol/content/";
-	if (LaunchSettings::AromaPlugins().empty() || !path.starts_with(target))
+	if (!LaunchSettings::AromaEnabled() || !path.starts_with(target))
 		return std::nullopt;
 	const auto relative = path.substr(target.size());
 	if (relative.empty() || relative.substr(relative.rfind('/') + 1).starts_with(".deleted_"))
@@ -313,7 +313,7 @@ std::optional<sint32> Open(const char* path, const char* mode, sint32be* output)
 
 std::optional<sint32> Close(uint32 handle)
 {
-	if (LaunchSettings::AromaPlugins().empty())
+	if (!LaunchSettings::AromaEnabled())
 		return std::nullopt;
 	decltype(s_files)::node_type file;
 	{
