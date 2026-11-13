@@ -11,7 +11,7 @@ Created by **Little_mac**. To our knowledge, this is the world’s first Wii U e
 [![Python](https://img.shields.io/badge/Python-loopback%20debugger-3776AB)](README-PYTHON.md)
 [![Tested](https://img.shields.io/badge/tested-Linux%20%7C%20AMD%20Vulkan-d94832)](docs/VALIDATION.md)
 
-[Quick start](#quick-start) · [Plugin compatibility](#plugin-compatibility) · [Architecture](README-AROMA.md) · [Validation](docs/VALIDATION.md)
+[Quick start](#quick-start) · [Plugin compatibility](#plugin-compatibility) · [Architecture](README-AROMA.md) · [Validation](docs/VALIDATION.md) · [Changelog](CHANGELOG.md)
 
 <img src="docs/images/london-amd.png" width="47%" alt="Wii Street U GamePad showing the London panorama">
 <img src="docs/images/paris-amd.png" width="47%" alt="Wii Street U GamePad showing the Paris panorama">
