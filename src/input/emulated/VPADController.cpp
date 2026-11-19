@@ -1,5 +1,6 @@
 #include "input/emulated/VPADController.h"
 #include "input/api/Controller.h"
+#include "input/api/DRC/DRCInput.h"
 #ifdef HAS_SDL
 #include "input/api/SDL/SDLController.h"
 #endif
@@ -77,7 +78,14 @@ void VPADController::VPADRead(VPADStatus_t& status, const BtnRepeat& repeat)
 
 	m_homebutton_down |= is_home_down();
 
-	const auto axis = get_axis();
+	DRCInput::Sample native;
+	const bool nativeInput = player_index() == 0 && DRCInput::Read(native);
+	if (nativeInput)
+	{
+		status.hold = native.buttons;
+		m_homebutton_down |= (native.buttons & VPAD_HOME) != 0;
+	}
+	const auto axis = nativeInput ? glm::vec2{native.sticks[0], native.sticks[1]} : get_axis();
 	status.leftStick.x = axis.x;
 	status.leftStick.y = axis.y;
 
@@ -95,7 +103,7 @@ void VPADController::VPADRead(VPADStatus_t& status, const BtnRepeat& repeat)
 	else if (axis.y >= kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_L_UP) && axis.y >= kHoldAxisThreshold))
 		status.hold |= VPAD_STICK_L_UP;
 
-	const auto rotation = get_rotation();
+	const auto rotation = nativeInput ? glm::vec2{native.sticks[2], native.sticks[3]} : get_rotation();
 	status.rightStick.x = rotation.x;
 	status.rightStick.y = rotation.y;
 
@@ -136,14 +144,26 @@ void VPADController::VPADRead(VPADStatus_t& status, const BtnRepeat& repeat)
 	m_last_holdvalue = currentHold;
 
 	// touch
-	update_touch(status);
+	if (nativeInput)
+	{
+		if (native.touching)
+			m_last_touch_position = {native.touchX, native.touchY};
+		status.tpData.x = static_cast<uint16>(m_last_touch_position.x);
+		status.tpData.y = static_cast<uint16>(m_last_touch_position.y);
+		status.tpData.touch = native.touching ? kTpTouchOn : kTpTouchOff;
+		status.tpData.validity = native.touching ? kTpValid : kTpInvalid;
+		status.tpProcessed1 = status.tpProcessed2 = status.tpData;
+	}
+	else
+		update_touch(status);
 
 	// motion
 	status.dir.x = {1, 0, 0};
 	status.dir.y = {0, 1, 0};
 	status.dir.z = {0, 0, 1};
 	status.accXY = {1.0f, 0.0f};
-	update_motion(status);
+	if (!nativeInput)
+		update_motion(status);
 }
 
 void VPADController::update()

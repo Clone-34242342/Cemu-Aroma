@@ -33,6 +33,15 @@
 
 // External functionality headers
 #include "input/InputManager.h"
+#include "input/api/DRC/DRCInput.h"
+#include "Cafe/OS/libs/coreinit/coreinit_IM.h"
+#include "Cafe/OS/libs/coreinit/coreinit_Scheduler.h"
+#include "Cafe/OS/libs/coreinit/coreinit_Thread.h"
+#if BOOST_OS_LINUX
+#include <csignal>
+#include <atomic>
+#endif
+#include <wx/timer.h>
 #include "Cafe/TitleList/TitleList.h"
 #include "Cemu/DiscordPresence/DiscordPresence.h"
 #include "util/ScreenSaver/ScreenSaver.h"
@@ -65,6 +74,17 @@
 
 extern WindowSystem::WindowInfo g_window_info;
 extern std::shared_mutex g_mutex;
+#if BOOST_OS_LINUX
+namespace
+{
+static_assert(std::atomic<int>::is_always_lock_free);
+std::atomic<int> s_globalPauseRequest{0};
+void RequestGlobalPause(int signal)
+{
+    s_globalPauseRequest.store(signal, std::memory_order_relaxed);
+}
+}
+#endif
 
 enum
 {
@@ -83,13 +103,15 @@ enum
 	MAINFRAME_MENU_ID_FILE_RECENT_LAST = MAINFRAME_MENU_ID_FILE_RECENT_0 + 15,
 	// options
 	MAINFRAME_MENU_ID_OPTIONS_FULLSCREEN = 20200,
-	MAINFRAME_MENU_ID_OPTIONS_SECOND_WINDOW_PADVIEW,
+		MAINFRAME_MENU_ID_OPTIONS_SECOND_WINDOW_PADVIEW,
 	MAINFRAME_MENU_ID_OPTIONS_GRAPHIC,
 	MAINFRAME_MENU_ID_OPTIONS_GRAPHIC_PACKS2,
 	MAINFRAME_MENU_ID_OPTIONS_GENERAL,
 	MAINFRAME_MENU_ID_OPTIONS_GENERAL2,
 	MAINFRAME_MENU_ID_OPTIONS_AUDIO,
 	MAINFRAME_MENU_ID_OPTIONS_INPUT,
+	MAINFRAME_MENU_ID_OPTIONS_NATIVE_GAMEPAD,
+	MAINFRAME_MENU_ID_OPTIONS_CONSOLE_SYNC,
 	MAINFRAME_MENU_ID_OPTIONS_HOTKEY,
 	MAINFRAME_MENU_ID_OPTIONS_MAC_SETTINGS,
 	// options -> account
@@ -109,6 +131,7 @@ enum
 	MAINFRAME_MENU_ID_OPTIONS_LANGUAGE_PORTUGUESE,
 	MAINFRAME_MENU_ID_OPTIONS_LANGUAGE_RUSSIAN,
 	MAINFRAME_MENU_ID_OPTIONS_LANGUAGE_TAIWANESE,
+	MAINFRAME_MENU_ID_OPTIONS_PAUSE = 20599,
 	// tools
 	MAINFRAME_MENU_ID_TOOLS_MEMORY_SEARCHER = 20600,
 	MAINFRAME_MENU_ID_TOOLS_TITLE_MANAGER,
@@ -185,6 +208,7 @@ EVT_MENU_RANGE(MAINFRAME_MENU_ID_FILE_RECENT_0 + 0, MAINFRAME_MENU_ID_FILE_RECEN
 EVT_MENU_RANGE(MAINFRAME_MENU_ID_OPTIONS_ACCOUNT_1, MAINFRAME_MENU_ID_OPTIONS_ACCOUNT_12, MainWindow::OnAccountSelect)
 EVT_MENU_RANGE(MAINFRAME_MENU_ID_OPTIONS_LANGUAGE_JAPANESE, MAINFRAME_MENU_ID_OPTIONS_LANGUAGE_TAIWANESE, MainWindow::OnConsoleLanguage)
 // options menu
+EVT_MENU(MAINFRAME_MENU_ID_OPTIONS_PAUSE, MainWindow::OnOptionsInput)
 EVT_MENU(MAINFRAME_MENU_ID_OPTIONS_FULLSCREEN, MainWindow::OnOptionsInput)
 EVT_MENU(MAINFRAME_MENU_ID_OPTIONS_SECOND_WINDOW_PADVIEW, MainWindow::OnOptionsInput)
 EVT_MENU(MAINFRAME_MENU_ID_OPTIONS_GRAPHIC, MainWindow::OnOptionsInput)
@@ -193,6 +217,8 @@ EVT_MENU(MAINFRAME_MENU_ID_OPTIONS_GENERAL, MainWindow::OnOptionsInput)
 EVT_MENU(MAINFRAME_MENU_ID_OPTIONS_GENERAL2, MainWindow::OnOptionsInput)
 EVT_MENU(MAINFRAME_MENU_ID_OPTIONS_AUDIO, MainWindow::OnOptionsInput)
 EVT_MENU(MAINFRAME_MENU_ID_OPTIONS_INPUT, MainWindow::OnOptionsInput)
+EVT_MENU(MAINFRAME_MENU_ID_OPTIONS_NATIVE_GAMEPAD, MainWindow::OnOptionsInput)
+EVT_MENU(MAINFRAME_MENU_ID_OPTIONS_CONSOLE_SYNC, MainWindow::OnOptionsInput)
 EVT_MENU(MAINFRAME_MENU_ID_OPTIONS_HOTKEY, MainWindow::OnOptionsInput)
 EVT_MENU(MAINFRAME_MENU_ID_OPTIONS_MAC_SETTINGS, MainWindow::OnOptionsInput)
 // tools menu
@@ -320,6 +346,10 @@ MainWindow::MainWindow()
 	SendMessage(this->GetHWND(), WM_SETICON, ICON_SMALL, (LPARAM)hWindowIcon);
 #endif
 
+	// Publish before queuing the command-line launch event.
+	if (LaunchSettings::GDBStubEnabled())
+		g_gdbstub = std::make_unique<GDBServer>(GetConfig().gdb_port);
+
 	auto* main_sizer = new wxBoxSizer(wxVERTICAL);
     auto load_file = LaunchSettings::GetLoadFile();
     auto load_title_id = LaunchSettings::GetLoadTitleID();
@@ -361,8 +391,22 @@ MainWindow::MainWindow()
 
 	m_last_mouse_move_time = std::chrono::steady_clock::now();
 
+#if BOOST_OS_LINUX
+    std::signal(SIGUSR1, RequestGlobalPause);
+    std::signal(SIGUSR2, RequestGlobalPause);
+    m_globalPauseTimer.SetOwner(this);
+    Bind(wxEVT_TIMER, [this](wxTimerEvent&) {
+        const int request = s_globalPauseRequest.exchange(0, std::memory_order_relaxed);
+        if (request == SIGUSR1)
+            SetEmulationPaused(false);
+        else if (request == SIGUSR2)
+            SetEmulationPaused(!m_emulationPaused);
+    }, m_globalPauseTimer.GetId());
+    m_globalPauseTimer.Start(40);
+#endif
 	m_timer = new wxTimer(this, MAINFRAME_ID_TIMER1);
 	m_timer->Start(500);
+
 
 	LoadSettings();
 
@@ -374,10 +418,6 @@ MainWindow::MainWindow()
 	Bind(wxEVT_OPEN_GRAPHIC_PACK, &MainWindow::OnGraphicWindowOpen, this);
 	Bind(wxEVT_LAUNCH_GAME, &MainWindow::OnLaunchFromFile, this);
 
-	if (LaunchSettings::GDBStubEnabled())
-	{
-			g_gdbstub = std::make_unique<GDBServer>(GetConfig().gdb_port);
-	}
 
 	if (LaunchSettings::OpenDebuggerEnabled())
 		OpenPPCDebugger();
@@ -438,6 +478,10 @@ wxString MainWindow::GetInitialWindowTitle()
 
 void MainWindow::OnClose(wxCloseEvent& event)
 {
+#if BOOST_OS_LINUX
+    m_globalPauseTimer.Stop();
+#endif
+	SetEmulationPaused(false);
 	if (m_debugger_window)
 	{
 		m_debugger_window->CleanupForDestroy();
@@ -889,6 +933,9 @@ void MainWindow::OnOptionsInput(wxCommandEvent& event)
 {
 	switch (event.GetId())
 	{
+	case MAINFRAME_MENU_ID_OPTIONS_PAUSE:
+		SetEmulationPaused(!m_emulationPaused);
+		break;
 	case MAINFRAME_MENU_ID_OPTIONS_FULLSCREEN:
 	{
 		const bool state = m_fullscreenMenuItem->IsChecked();
@@ -925,6 +972,68 @@ void MainWindow::OnOptionsInput(wxCommandEvent& event)
 		OpenSettings();
 		break;
 	}
+	case MAINFRAME_MENU_ID_OPTIONS_CONSOLE_SYNC:
+	{
+		if (!CafeSystem::IsTitleRunning() || !coreinit::PressConsoleSync())
+			wxMessageBox(_("The Wii U Menu has no active subscription to console SYNC events."), _("Wii U Console SYNC"), wxOK | wxICON_INFORMATION, this);
+		break;
+	}
+
+#ifdef __linux__
+	case MAINFRAME_MENU_ID_OPTIONS_NATIVE_GAMEPAD:
+	{
+		wxDialog dialog(this, wxID_ANY, _("Native Wii U GamePad"));
+		auto* layout = new wxBoxSizer(wxVERTICAL);
+		auto* enabled = new wxCheckBox(&dialog, wxID_ANY, _("Enable native GamePad input"));
+		auto* local = new wxTextCtrl(&dialog, wxID_ANY, "192.168.1.10");
+		auto* peer = new wxTextCtrl(&dialog, wxID_ANY, "192.168.1.11");
+		auto* status = new wxStaticText(&dialog, wxID_ANY,
+			_("Uses an existing GamePad Wi-Fi link. Pairing is pending."));
+		auto* connection = new wxStaticText(&dialog, wxID_ANY, _("No GamePad packets received."));
+		DRCInput::Sample sample;
+		enabled->SetValue(DRCInput::Read(sample));
+		layout->Add(enabled, 0, wxALL, 8);
+		layout->Add(new wxStaticText(&dialog, wxID_ANY, _("Local GamePad interface IPv4 address")), 0, wxLEFT | wxRIGHT, 8);
+		layout->Add(local, 0, wxEXPAND | wxALL, 8);
+		layout->Add(new wxStaticText(&dialog, wxID_ANY, _("GamePad IPv4 address")), 0, wxLEFT | wxRIGHT, 8);
+		layout->Add(peer, 0, wxEXPAND | wxALL, 8);
+		layout->Add(status, 0, wxALL, 8);
+		layout->Add(connection, 0, wxALL, 8);
+		layout->Add(new wxButton(&dialog, wxID_CANCEL, _("Close")), 0, wxALIGN_RIGHT | wxALL, 8);
+		layout->SetMinSize(540, -1);
+		dialog.SetSizerAndFit(layout);
+
+		wxTimer timer(&dialog);
+		dialog.Bind(wxEVT_TIMER, [&](wxTimerEvent&)
+		{
+			bool receiving = false;
+			const bool listening = DRCInput::Read(sample, &receiving);
+			connection->SetLabel(receiving ? _("GamePad input received.") :
+				listening ? _("Waiting for GamePad input.") : _("Native input is off."));
+		}, timer.GetId());
+		timer.Start(100);
+
+		auto apply = [&]
+		{
+			const bool ok = DRCInput::Configure(enabled->GetValue(),
+				local->GetValue().ToStdString(), peer->GetValue().ToStdString());
+			if (!ok)
+			{
+				enabled->SetValue(DRCInput::Read(sample));
+				status->SetLabel(_("Could not bind the receiver. Check both IPv4 addresses."));
+			}
+			return ok;
+		};
+		enabled->Bind(wxEVT_CHECKBOX, [&](wxCommandEvent&)
+		{
+			if (apply())
+				status->SetLabel(_("Uses an existing GamePad Wi-Fi link. Pairing is pending."));
+		});
+		dialog.ShowModal();
+		break;
+	}
+#endif
+
 	case MAINFRAME_MENU_ID_OPTIONS_INPUT:
 	{
 		auto* frame = new InputSettings2(this);
@@ -1771,8 +1880,41 @@ void MainWindow::SetFullScreen(bool state)
 		SetMenuVisible(true);
 }
 
+void MainWindow::SetEmulationPaused(bool pause)
+{
+    if (m_emulationPaused == pause || (pause && !CafeSystem::IsTitleRunning()))
+        return;
+
+    __OSLockScheduler();
+    for (sint32 i = 0; i < activeThreadCount; ++i)
+    {
+        const MPTR address = activeThread[i];
+        auto* thread = reinterpret_cast<OSThread_t*>(memory_getPointerFromPhysicalOffset(address));
+        if (pause)
+        {
+            m_pauseThreads.insert(address);
+            coreinit::__OSSuspendThreadNolock(thread);
+        }
+        else if (m_pauseThreads.erase(address))
+        {
+            coreinit::__OSResumeThreadInternal(thread, 1);
+        }
+    }
+    m_emulationPaused = pause;
+    if (!pause)
+        m_pauseThreads.clear();
+    __OSUnlockScheduler();
+
+    if (m_menuBar)
+    {
+        if (auto* item = m_menuBar->FindItem(MAINFRAME_MENU_ID_OPTIONS_PAUSE))
+            item->SetItemLabel(pause ? _("&Resume	F4") : _("&Pause	F4"));
+    }
+}
+
 void MainWindow::EndEmulation() // unfinished - memory leaks and crashes after repeated use (after 3x usually)
 {
+	SetEmulationPaused(false);
 	CafeSystem::ShutdownTitle();
 	DestroyCanvas();
 	m_game_launched = false;
@@ -2258,6 +2400,8 @@ void MainWindow::RecreateMenu()
 
 	// options submenu
 	wxMenu* optionsMenu = new wxMenu();
+    optionsMenu->Append(MAINFRAME_MENU_ID_OPTIONS_PAUSE, m_emulationPaused ? _("&Resume	F4") : _("&Pause	F4"))
+        ->Enable(m_game_launched);
 	m_fullscreenMenuItem = optionsMenu->AppendCheckItem(MAINFRAME_MENU_ID_OPTIONS_FULLSCREEN, _("&Fullscreen"));
 	m_fullscreenMenuItem->Check(FullscreenEnabled());
 
@@ -2270,6 +2414,10 @@ void MainWindow::RecreateMenu()
 	#endif
 	optionsMenu->Append(MAINFRAME_MENU_ID_OPTIONS_GENERAL2, _("&General settings"));
 	optionsMenu->Append(MAINFRAME_MENU_ID_OPTIONS_INPUT, _("&Input settings"));
+	optionsMenu->Append(MAINFRAME_MENU_ID_OPTIONS_CONSOLE_SYNC, _("Press Wii U Console SYNC"));
+#ifdef __linux__
+	optionsMenu->Append(MAINFRAME_MENU_ID_OPTIONS_NATIVE_GAMEPAD, _("Native Wii U GamePad..."));
+#endif
 	optionsMenu->Append(MAINFRAME_MENU_ID_OPTIONS_HOTKEY, _("&Hotkey settings"));
 
 	optionsMenu->AppendSeparator();

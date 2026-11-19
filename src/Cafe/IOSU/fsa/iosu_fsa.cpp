@@ -1,3 +1,4 @@
+#include "config/LaunchSettings.h"
 #include "Cafe/Aroma/ContentRedirection.h"
 #include "Common/CafeStaticVar.h"
 #include "fsa_types.h"
@@ -878,6 +879,11 @@ namespace iosu
 				{
 					cemu_assert(clientHandle < sFSAClientArray.size());
 					cemu_assert(sFSAClientArray[clientHandle].isAllocated);
+					if (LaunchSettings::AromaEnabled() && cmd->args[0] == 0x28)
+					{
+						IOS_ResourceReply(cmd, IOS_ERROR_OK);
+						continue;
+					}
 					FSAHandleCommandIoctl(sFSAClientArray.data() + clientHandle, cmd, (FSA_CMD_OPERATION_TYPE)cmd->args[0].value(), MEMPTR<void>(cmd->args[1]), MEMPTR<void>(cmd->args[3]));
 				}
 				else if (cmd->cmdId == IPCCommandId::IOS_IOCTLV)

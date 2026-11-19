@@ -101,3 +101,18 @@ connects. Alternating native code hooks were checked against the executing
 physics timestep. A core can finish an already-running translated block after a
 write, so wait for the changed code to execute before taking measurements.
 Other operating systems have not been tested.
+
+
+### Debugging Aroma startup and reloads
+
+Add `--python-debug-start-paused` to stop at the system startup entry before
+Aroma modules and plugins execute. This also enables the Python debugger. Attach
+with `CemuDebug`, inspect the initial state, and leave the context to resume.
+This is earlier than the title's ordinary entry breakpoint, which can be too late
+for plugin initialization failures. The listener remains available across title
+reloads, including the verified WiiLoad RPX-only handoff.
+
+The transfer helpers are `tools/python/aroma_ftp_smoke_test.py` (upload, retrieve,
+compare and delete a temporary SD file) and `tools/python/wiiload_send.py`
+(uncompressed RPX transfer to the real WiiLoad plugin). A completed send does
+not by itself prove execution; confirm a build marker in the guest console log.

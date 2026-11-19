@@ -56,6 +56,7 @@ class FileStream
 
 	bool m_isValid{};
 	std::fstream m_fileStream;
+	fs::path m_path;
 	bool m_prevOperationWasWrite{false};
 
 };

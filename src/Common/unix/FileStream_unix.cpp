@@ -101,9 +101,15 @@ uint64 FileStream::GetSize()
 
 bool FileStream::SetEndOfFile()
 {
-	assert_dbg();
-	return true;
-	//return ::SetEndOfFile(m_hFile) != 0;
+	if (!m_isValid || m_path.empty())
+		return false;
+	m_fileStream.flush();
+	const auto position = m_prevOperationWasWrite ? m_fileStream.tellp() : m_fileStream.tellg();
+	if (position == std::streampos(-1))
+		return false;
+	std::error_code error;
+	fs::resize_file(m_path, static_cast<uint64>(position), error);
+	return !error;
 }
 
 void FileStream::extract(std::vector<uint8>& data)
@@ -212,7 +218,9 @@ FileStream::~FileStream()
 
 FileStream::FileStream(const fs::path& path, bool isOpen, bool isWriteable)
 {
-	fs::path CIPath = findPathCI(path);
+	const fs::path CIPath = findPathCI(path);
+	if (!isOpen || isWriteable)
+		m_path = fs::absolute(CIPath);
 	if (isOpen)
 	{
 		m_fileStream.open(CIPath, isWriteable ? (std::ios_base::in | std::ios_base::out | std::ios_base::binary) : (std::ios_base::in | std::ios_base::binary));

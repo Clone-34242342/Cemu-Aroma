@@ -226,6 +226,7 @@ struct RPLModule
 struct RPLDependency
 {
 	std::string moduleName;
+	std::string aromaSDPath;
 	bool isMainExecutable{false};
 	bool loadAttempted{false};
 	bool hleEntrypointCalled{false};

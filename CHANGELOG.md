@@ -4,6 +4,15 @@ This log tracks changes made in the fork since upstream Cemu commit `3b103161`. 
 
 ## Unreleased
 
+### November 19, 2026 · Aroma transfers and development workflow
+
+- Added guest-backend compatibility for the tested Aroma Base Plugin, FTPiiU, Homebrew on Wii U Menu and WiiLoad stack: lifecycle hooks, matching dynamic/static exports, FSA callback and request-building paths, mapped-address validation, and related account/controller/system APIs.
+- Added `--aroma-ftp-port` for an explicit unprivileged host FTP port, RPX-only WiiLoad reload support retaining the current title's assets/save identity, and terminal transfer helpers. Prior native plugin tests and their limits are documented in [README-AROMA.md](README-AROMA.md#four-plugin-compatibility-validation--2026-11-18).
+- Added `--python-debug-start-paused`, retained the debugger listener across executable reloads, and included the Linux pause-hotkey helper. Python controls the C++ emulator's debugger; it is not a replacement CPU emulator.
+- Included the experimental Linux native GamePad UDP input receiver, IM/WPAD sync notification work and pairing-profile generator. This is not complete physical GamePad pairing, video/audio streaming or Fit Meter support; see [native-gamepad.md](docs/native-gamepad.md).
+- Validation at publication: all 15 Python debugger unit tests pass; the existing `build-python` CemuBin build has no pending compilation work. Native plugin/FTP/RPX-handoff results are the earlier documented tests, not a new hardware-equivalence claim. Console keys/dumps, game assets and personal session logs are not part of this source update.
+
+
 - Added an Aroma toggle and plugin folder shortcut in General Settings. When enabled, Cemu loads modules and discovers plugins from the emulated SD card at title startup.
 
 ### November 12, 2026 · Aroma plugin support

@@ -150,7 +150,7 @@ namespace act
 			return 0;
 		}
 
-		sint32 g_initializeCount = 0; // inc in Initialize and dec in Finalize
+		std::atomic<sint32> g_initializeCount{0}; // inc in Initialize and dec in Finalize
 		uint32 Initialize()
 		{
 			// usually uses a mutex which is initialized in -> global constructor keyed to'_17_act_shim_util_cpp
@@ -164,6 +164,13 @@ namespace act
 
 			g_initializeCount++;
 
+			return 0;
+		}
+
+		uint32 Finalize()
+		{
+			auto count = g_initializeCount.load();
+			while (count > 0 && !g_initializeCount.compare_exchange_weak(count, count - 1)) {}
 			return 0;
 		}
 
@@ -698,6 +705,7 @@ namespace nn::act
 			g_initializeCount = 0;
 			g_isParentalControlCheckEnabled = false;
 			osLib_addFunction("nn_act", "Initialize__Q2_2nn3actFv", nnActExport_Initialize);
+			cafeExportRegisterFunc(Finalize, "nn_act", "Finalize__Q2_2nn3actFv", LogType::Placeholder);
 
 			osLib_addFunction("nn_act", "CreateConsoleAccount__Q2_2nn3actFv", nnActExport_CreateConsoleAccount);
 

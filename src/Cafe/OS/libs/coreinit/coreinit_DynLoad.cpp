@@ -158,14 +158,18 @@ namespace coreinit
 		if (moduleHandle == RPL_INVALID_HANDLE || !Aroma::FindModuleName(moduleHandle).empty())
 			return;
 
-		for (const auto& cb : notifyCallbacks) 
+		const auto moduleName = RPLLoader_GetModuleNameByHandle(moduleHandle);
+		if (moduleName.empty())
+			return;
+
+		for (const auto& cb : notifyCallbacks)
 		{
+			RPLModule* module = RPLLoader_GetModuleByName(moduleName);
+			if (!module)
+				break;
+
 			MEMPTR<OSDynLoad_NotifyData> notifyData;
 			notifyData = (OSDynLoad_NotifyData*)OSDynLoad_AllocatorAlloc(sizeof(OSDynLoad_NotifyData), 4);
-			RPLModule* module = RPLLoader_GetModuleByName(RPLLoader_GetModuleNameByHandle(moduleHandle));
-
-			if (!module) 
-				break;
 
 			notifyData->name = module->ppcName.GetMPTR();
 
@@ -242,6 +246,10 @@ namespace coreinit
 		if (count == 0)
 			return 1;
 		auto modules = RPLLoader_GetModuleList();
+		const auto unnamed = std::getenv("CEMU_CAKE_TEST_UNNAMED_RPL")
+			? std::ranges::find_if(modules, [](const auto* module) { return module->moduleName == "cake_returns"; })
+			: modules.end();
+		const auto unnamedIndex = static_cast<size_t>(unnamed - modules.begin());
 		for (uint32 i = first; i < first + count; i++)
 		{
 			auto& outEntry = outInfos[i - first];
@@ -250,19 +258,23 @@ namespace coreinit
 				memset(&outEntry, 0, sizeof(OSDynLoad_NotifyData));
 				continue;
 			}
-			outEntry.name = modules[i]->ppcName.GetMPTR();
+			// Put the unnamed record first while keeping all other records intact.
+			const auto index = unnamed == modules.end() || i > unnamedIndex
+				? i : (i == 0 ? unnamedIndex : i - 1);
+			const auto* module = modules[index];
+			outEntry.name = unnamed != modules.end() && i == 0 ? nullptr : module->ppcName.GetPtr();
 
-			outEntry.textAddr = modules[i]->regionMappingBase_text.GetBEValue();
-			outEntry.textOffset = modules[i]->regionMappingBase_text.GetMPTR() - modules[i]->regionOrigAddr_text;
-			outEntry.textSize = modules[i]->regionSize_text;
+			outEntry.textAddr = module->regionMappingBase_text.GetBEValue();
+			outEntry.textOffset = module->regionMappingBase_text.GetMPTR() - module->regionOrigAddr_text;
+			outEntry.textSize = module->regionSize_text;
 
-			outEntry.dataAddr = modules[i]->regionMappingBase_data;
-			outEntry.dataOffset = modules[i]->regionMappingBase_data - modules[i]->regionOrigAddr_data;
-			outEntry.dataSize = modules[i]->regionSize_data;
+			outEntry.dataAddr = module->regionMappingBase_data;
+			outEntry.dataOffset = module->regionMappingBase_data - module->regionOrigAddr_data;
+			outEntry.dataSize = module->regionSize_data;
 
-			outEntry.readAddr = modules[i]->regionMappingBase_data;
-			outEntry.readOffset = modules[i]->regionMappingBase_data - modules[i]->regionOrigAddr_data;
-			outEntry.readSize = modules[i]->regionSize_data;
+			outEntry.readAddr = outEntry.dataAddr;
+			outEntry.readOffset = outEntry.dataOffset;
+			outEntry.readSize = outEntry.dataSize;
 		}
 
 		return 1;

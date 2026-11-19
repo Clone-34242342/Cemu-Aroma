@@ -163,7 +163,7 @@ void LatteCP_signalEnterWait()
 
 /*
 * Read a U32 from the command buffer
-* If no data is available then wait in a busy loop
+* If no data is available, service pending work before waiting for submission
 */
 uint32 LatteCP_readU32Deprc()
 {
@@ -191,7 +191,7 @@ uint32 LatteCP_readU32Deprc()
 		// still no command data available, do some other tasks
 		LatteTiming_HandleTimedVsync();
 		LatteAsyncCommands_checkAndExecute();
-		std::this_thread::yield();
+		TCL::TCLGPUWaitForRBWord();
 		performanceMonitor.gpuTime_idleTime.endMeasuring();
 	}
 	UNREACHABLE;

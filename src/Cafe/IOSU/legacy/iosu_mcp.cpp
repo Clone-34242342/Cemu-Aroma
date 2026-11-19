@@ -3,6 +3,9 @@
 #include "Cafe/OS/libs/nn_common.h"
 
 #include "config/CemuConfig.h"
+#include "config/LaunchSettings.h"
+#include "config/ActiveSettings.h"
+#include "Cafe/Aroma/WupsLoader.h"
 #include "Cafe/TitleList/GameInfo.h"
 #include "util/helpers/helpers.h"
 #include "Cafe/TitleList/TitleList.h"
@@ -230,6 +233,55 @@ namespace iosu
 				{
 					cemu_assert(clientHandle < sMCPClientArray.size());
 					cemu_assert(sMCPClientArray[clientHandle].isAllocated);
+					// Mocha's public IPC extension is ioctl 100 (decimal), not 0x100.
+					if (LaunchSettings::AromaEnabled() && cmd->args[0] == 100 &&
+						uint32(cmd->args[2]) >= 4 && uint32(cmd->args[4]) >= 4 &&
+						memory_isAddressRangeAccessible(cmd->args[1], cmd->args[2]) &&
+						memory_isAddressRangeAccessible(cmd->args[3], cmd->args[4]))
+					{
+						auto* input = MEMPTR<uint32be>(cmd->args[1]).GetPtr();
+						if (input[0] == 0xfc && uint32(cmd->args[2]) >= 272)
+						{
+							bool prepared = false;
+							if (input[1] == 0x42424242)
+							{
+								Aroma::CancelPreparedHomebrewRPX();
+								prepared = true;
+							}
+							else if (input[1] == 0)
+							{
+								const auto* path = reinterpret_cast<const char*>(input + 4);
+								const auto* end = static_cast<const char*>(memchr(path, 0, 256));
+								prepared = end && Aroma::PrepareHomebrewRPX(std::string_view(path, end - path), input[3], input[2]);
+							}
+							IOS_ResourceReply(cmd, prepared ? IOS_ERROR_OK : IOS_ERROR_INVALID);
+							continue;
+						}
+						if (input[0] == 0xf9) // IPC_CUSTOM_COPY_ENVIRONMENT_PATH
+						{
+							std::error_code ec;
+							const auto directory = LaunchSettings::AromaModuleDirectory();
+							const auto environment = directory ? directory->parent_path() : LaunchSettings::AromaEnvironmentDirectory();
+							const auto relative = fs::relative(environment, ActiveSettings::GetUserDataPath("sdcard"), ec);
+							const auto relativeText = relative.generic_string();
+							const std::string path = "fs:/vol/external01/" + relativeText;
+							if (!ec && !relativeText.empty() && relativeText != ".." && !relativeText.starts_with("../") &&
+								path.size() + 1 <= uint32(cmd->args[4]))
+							{
+								memcpy(MEMPTR<void>(cmd->args[3]).GetPtr(), path.c_str(), path.size() + 1);
+								IOS_ResourceReply(cmd, IOS_ERROR_OK);
+								continue;
+							}
+						}
+						if (input[0] == 0xf8 && uint32(cmd->args[4]) >= 8) // IPC_CUSTOM_GET_MOCHA_API_VERSION
+						{
+							auto* output = MEMPTR<uint32be>(cmd->args[3]).GetPtr();
+							output[0] = 0xcafebabe;
+							output[1] = 1;
+							IOS_ResourceReply(cmd, IOS_ERROR_OK);
+							continue;
+						}
+					}
 					IOS_ResourceReply(cmd, (IOS_ERROR)0x80000000);
 					continue;
 				}
@@ -260,6 +312,13 @@ namespace iosu
 			sMCPIoMsgQueue = (IOSMsgQueueId)IOS_CreateMessageQueue(_m_sMCPIoMsgQueueMsgBuffer.GetPtr(), _m_sMCPIoMsgQueueMsgBuffer.GetCount());
 			IOS_ERROR r = IOS_RegisterResourceManager("/dev/mcp", sMCPIoMsgQueue);
 			IOS_DeviceAssociateId("/dev/mcp", 11);
+			if (LaunchSettings::AromaEnabled())
+			{
+				// libmocha opens this capability endpoint before negotiating with MCP.
+				// Reuse MCP client lifetime/dispatch; unsupported hax ioctls still fail.
+				IOS_RegisterResourceManager("/dev/iosuhax", sMCPIoMsgQueue);
+				IOS_DeviceAssociateId("/dev/iosuhax", 11);
+			}
 			cemu_assert(!IOS_ResultIsError(r));
 			sMCPIoThread = std::thread(MCPIoThread);
 		}

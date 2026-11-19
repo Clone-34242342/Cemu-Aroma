@@ -876,3 +876,90 @@ Menu v0.4.1**. The session used Xvfb, Vulkan and zero TV/GamePad volume.
 The native backend's plugin directory was empty, so this verifies menu
 entry and rendering. Native plugin registration and settings changes
 remain unverified. [GamePad capture](docs/images/aroma-config-wii-street-u.png)
+
+
+## Four-plugin compatibility validation — 2026-11-18
+
+The isolated Linux test uses **Aroma Base Plugin, FTPiiU, Homebrew on Wii U Menu,
+and WiiLoad**, with their required WUMS modules. The guest WUPS backend discovers
+and loads the plugins from the active emulated SD environment; Cemu does not map
+a second copy of each plugin when that backend is present.
+
+This update fixes the following emulator-side problems:
+
+- Missing module imports prevented the shared backend from initializing. Added
+  the default AppIO completion queue and filesystem callback worker, settings
+  launch support, positioned FSA reads and the required filesystem helpers.
+- WUMS loader-only allocator hooks incorrectly disabled every module lifecycle
+  hook. Cemu now recognizes those hooks while retaining ownership of RPL memory.
+- Runtime WUMS export tables disagreed with Cemu's linker substitutions. Guest
+  dynamic lookups now see the same mapped-memory allocator slots and kernel-copy
+  implementation as static imports.
+- ContentRedirectionModule calls private Cafe OS FSA request builders at fixed
+  firmware addresses. Cemu maps those addresses to its existing request builders
+  and allocates their recompiler lookup blocks. Mapping memory alone was not
+  sufficient: a compiled indirect call otherwise faulted in the jump table.
+- Homebrew on Menu needs the production-settings serial fields. These now read
+  the existing EEPROM dump rather than remaining empty. Identifying values are
+  not added to these documentation or test reports.
+- Added the Mocha API handshake, active-environment path and filesystem-client
+  permission compatibility needed by these plugins. Unsupported IOSU operations
+  still return errors.
+- Unmapped addresses no longer pass `OSEffectiveToPhysical`; `OSIsAddressValid`
+  is implemented. This prevented a diagnostic thread from treating an invalid
+  pointer as readable during Kirby's exit.
+- Account finalization and per-thread run-quantum support are available to small
+  homebrew executables as well as larger ports.
+- The Python debugger can stop before system/plugin startup and retain its
+  listener across an executable reload.
+
+### Verified behavior
+
+| Test | Result |
+| --- | --- |
+| Four plugins, guest WUPS backend, Kirby Triple Deluxe | Reached the first rendered frame in multicore recompiler mode |
+| FTPiiU upload/download | 4,096 bytes matched SHA-256; test file deleted; passed in interpreter and recompiler modes |
+| WiiLoad diagnostic receiver to replacement RPX | Replacement executable printed its unique entry marker |
+| Kirby to replacement RPX through native WiiLoad | Replacement entry marker confirmed after normal title exit |
+| Identity during RPX-only reload | Same title ID and base RPX hash; updated RPX hash changed |
+| Debugger after reload | Python reattached and resumed the replacement executable |
+| FTP after reload | Upload/download round trip still passed |
+| Python debugger unit tests | 15 passed |
+
+WiiLoad's transfer test uses a 50,625-byte diagnostic RPX. Receiving a TCP payload
+alone is not the success criterion: the replacement's entry marker must appear.
+
+### Reproducing transfers
+
+On Linux, use `--aroma-ftp-port 2121` to explicitly map the guest FTP listener on
+port 21 to an unprivileged host port. The guest still observes port 21. Connect to
+the host address shown by the listener; it may bind the PC's LAN address rather
+than loopback.
+
+```sh
+python3 tools/python/aroma_ftp_smoke_test.py --host YOUR_PC_IP --port 2121
+python3 tools/python/wiiload_send.py rebuilt.rpx --host 127.0.0.1
+```
+
+The sender uses WiiLoad protocol 0.4 without compression. The tested WiiLoad
+plugin's compressed file path selects the same temporary filename for input and
+output and later removes it. An uncompressed transfer avoids that separate
+plugin problem; the plugin binary was not patched for this test.
+
+Cemu's Mocha handoff currently verifies **RPX-only reloads using the current
+title's assets and save identity**. It validates the SD path, bounded file slice
+and RPX header, then consumes the prepared executable on the scheduled reload.
+It does not establish compatibility with arbitrary new WUHB content mounts or
+prove that the full Wii U Menu homebrew interface works. Raw SLC, optical-disc
+and USB device access is also not implemented by this test setup; those mount
+requests can report errors while SD FTP works.
+
+The MemoryMapping and kernel-copy services use Cemu's flat mapped address space.
+These tests validate the plugin paths above, not full Wii U kernel emulation or
+hardware-equivalent memory pressure.
+
+### Native spinlock comparison (2026-11-18)
+
+A hardware capture from a 3Dii U title stopped in coreinit's uninterruptible heap lock. Disassembling the locally dumped coreinit showed ownership is cleared before scheduling is restored. The local HLE release now follows that order, and OSIsInterruptEnabled is exported (it previously existed only as an internal helper). A native PowerPC probe installed the same four acquisition/release tracing wrappers used by the hardware diagnostic module and passed 24 transitions: recursive and ordinary locks, with the interrupt mask initially disabled and enabled, restored afterward. Evidence is retained locally with the Aroma flight recorder validation artifacts.
+
+This does not make HLE scheduling hardware-equivalent. The single-core wait still deliberately yields in an uninterruptible state to prevent the emulator itself from deadlocking. Such a successful emulator run cannot establish that native module contention will be safe on Wii U hardware. The tracing hooks preserve lock semantics and do not force-release locks.

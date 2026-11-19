@@ -1,4 +1,6 @@
 #include "Cafe/Aroma/ContentRedirection.h"
+#include "config/LaunchSettings.h"
+#include "Cafe/HW/Espresso/Recompiler/PPCRecompiler.h"
 #include <OS/RPL/rpl.h>
 #include "config/ActiveSettings.h"
 #include "Cafe/OS/libs/coreinit/coreinit_SystemInfo.h"
@@ -153,6 +155,29 @@ namespace coreinit
 		}
 
 		return FS_RESULT::SUCCESS;
+	}
+
+	FS_RESULT FSUnmount(FSClient_t* client, FSCmdBlock_t* cmd, const char* target, FS_ERROR_MASK errorMask)
+	{
+		if (!client || !cmd || !target)
+			return FS_RESULT::ERR_PLACEHOLDER;
+		if (_sdCard01Mounted && s_sdCardMountPath == target)
+		{
+			if (!fsc_unmount(target, FSC_PRIORITY_BASE))
+				return FS_RESULT::ERR_PLACEHOLDER;
+			_sdCard01Mounted = false;
+			s_sdCardMountPath.clear();
+			return FS_RESULT::SUCCESS;
+		}
+		if (_mlc01Mounted && s_mlcMountPath == target)
+		{
+			if (!fsc_unmount(target, FSC_PRIORITY_BASE))
+				return FS_RESULT::ERR_PLACEHOLDER;
+			_mlc01Mounted = false;
+			s_mlcMountPath.clear();
+			return FS_RESULT::SUCCESS;
+		}
+		return FS_RESULT::NOT_FOUND;
 	}
 
 	FS_RESULT FSBindMount(FSClient_t* fsClient, FSCmdBlock_t* fsCmdBlock, char* mountPathSrc, char* mountPathOut, FS_ERROR_MASK errMask)
@@ -2446,7 +2471,7 @@ namespace coreinit
 		if (result != FSA_RESULT::OK)
 			return result;
 
-		result = __FSPrepareCmd_ReadFile(shimBuffer->GetPtr(), client, buffer, size, count, 0, handle, flags & ~0x2);
+		result = __FSPrepareCmd_ReadFile(shimBuffer->GetPtr(), client, buffer, size, count, 0, handle, flags & ~FSA_CMD_FLAG_SET_POS);
 		if (result == FSA_RESULT::OK)
 		{
 			result = __FSAIPCSubmitCommand(shimBuffer->GetPtr());
@@ -2454,6 +2479,27 @@ namespace coreinit
 
 		FSAShimFreeBuffer(shimBuffer->GetPtr());
 		return result;
+	}
+
+	FSA_RESULT FSAReadFileWithPos(FSAClientHandle client, void* buffer, uint32 size, uint32 count, uint32 pos, FSFileHandle2 handle, uint32 flags)
+	{
+		if (!FSAShimCheckClientHandle(client))
+			return FSA_RESULT::INVALID_CLIENT_HANDLE;
+		StackAllocator<MEMPTR<iosu::fsa::FSAShimBuffer>, 1> shimBuffer;
+		FSA_RESULT result = FSAShimAllocateBuffer(shimBuffer.GetPointer());
+		if (result != FSA_RESULT::OK)
+			return result;
+		result = __FSPrepareCmd_ReadFile(shimBuffer->GetPtr(), client, buffer, size, count, pos, handle, flags | FSA_CMD_FLAG_SET_POS);
+		if (result == FSA_RESULT::OK)
+			result = __FSAIPCSubmitCommand(shimBuffer->GetPtr());
+		FSAShimFreeBuffer(shimBuffer->GetPtr());
+		return result;
+	}
+
+	FSA_RESULT __FSAShimDecodeIosErrorToFsaStatus(sint32 handle, IOS_ERROR result)
+	{
+		// IOSU's filesystem service already returns FSA status codes here.
+		return __FSADecodeIOSErrorToFSA(result);
 	}
 
 	FSA_RESULT FSAWriteFile(FSAClientHandle client, void* buffer, uint32_t size, uint32_t count, FSFileHandle2 handle, uint32_t flags)
@@ -2466,7 +2512,7 @@ namespace coreinit
 		if (result != FSA_RESULT::OK)
 			return result;
 
-		result = __FSPrepareCmd_WriteFile(shimBuffer->GetPtr(), client, buffer, size, count, 0, handle, flags & ~0x2);
+		result = __FSPrepareCmd_WriteFile(shimBuffer->GetPtr(), client, buffer, size, count, 0, handle, flags & ~FSA_CMD_FLAG_SET_POS);
 		if (result == FSA_RESULT::OK)
 		{
 			result = __FSAIPCSubmitCommand(shimBuffer->GetPtr());
@@ -2680,9 +2726,71 @@ namespace coreinit
 		s_fsa_activeClients.clear();
 	}
 
+
+	// Aroma's content-redirection module calls these firmware-private helpers by
+	// fixed Cafe OS address. Reuse the same request builders as public FS/FSA.
+	static void InitializeAromaFSFirmwareABI()
+	{
+		if (!LaunchSettings::AromaEnabled())
+			return;
+		if (!mmuRange_COREINIT_COMPAT.isMapped())
+			mmuRange_COREINIT_COMPAT.mapMem();
+		PPCRecompiler_allocateRange(mmuRange_COREINIT_COMPAT.getBase(), mmuRange_COREINIT_COMPAT.getSize());
+		const auto install = [](uint32 address, const char* name) {
+			const auto entry = rpl_mapHLEImport(nullptr, "coreinit", name, false);
+			cemu_assert(entry != MPTR_NULL);
+			memory_writeU32(address, memory_readU32(entry));
+			memory_writeU32(address + 4, 0x4e800020); // blr
+		};
+		cafeExportRegister("coreinit", __FSPrepareCmd_ReadFile, LogType::CoreinitFile);
+		install(0x0105facc, "__FSPrepareCmd_ReadFile");
+		cafeExportRegister("coreinit", __FSPrepareCmd_WriteFile, LogType::CoreinitFile);
+		install(0x0105fbf4, "__FSPrepareCmd_WriteFile");
+		cafeExportRegister("coreinit", __FSPrepareCmd_OpenFile, LogType::CoreinitFile);
+		install(0x0105f988, "__FSPrepareCmd_OpenFile");
+		cafeExportRegister("coreinit", __FSPrepareCmd_CloseFile, LogType::CoreinitFile);
+		install(0x0105fe00, "__FSPrepareCmd_CloseFile");
+		cafeExportRegister("coreinit", __FSPrepareCmd_GetStatFile, LogType::CoreinitFile);
+		install(0x0105fd98, "__FSPrepareCmd_GetStatFile");
+		cafeExportRegister("coreinit", __FSPrepareCmd_QueryInfo, LogType::CoreinitFile);
+		install(0x01060518, "__FSPrepareCmd_QueryInfo");
+		cafeExportRegister("coreinit", __FSPrepareCmd_SetPosFile, LogType::CoreinitFile);
+		install(0x0105fd30, "__FSPrepareCmd_SetPosFile");
+		cafeExportRegister("coreinit", __FSPrepareCmd_GetPosFile, LogType::CoreinitFile);
+		install(0x0105fcfc, "__FSPrepareCmd_GetPosFile");
+		cafeExportRegister("coreinit", __FSPrepareCmd_IsEof, LogType::CoreinitFile);
+		install(0x0105fd64, "__FSPrepareCmd_IsEof");
+		cafeExportRegister("coreinit", __FSPrepareCmd_TruncateFile, LogType::CoreinitFile);
+		install(0x0105fe34, "__FSPrepareCmd_TruncateFile");
+		cafeExportRegister("coreinit", __FSPrepareCmd_Remove, LogType::CoreinitFile);
+		install(0x0105fea8, "__FSPrepareCmd_Remove");
+		cafeExportRegister("coreinit", __FSPrepareCmd_Rename, LogType::CoreinitFile);
+		install(0x0105ffc0, "__FSPrepareCmd_Rename");
+		cafeExportRegister("coreinit", __FSPrepareCmd_FlushFile, LogType::CoreinitFile);
+		install(0x0105fdcc, "__FSPrepareCmd_FlushFile");
+		cafeExportRegister("coreinit", __FSPrepareCmd_ChangeMode, LogType::CoreinitFile);
+		install(0x010603f4, "__FSPrepareCmd_ChangeMode");
+		cafeExportRegister("coreinit", __FSPrepareCmd_OpenDir, LogType::CoreinitFile);
+		install(0x0105f858, "__FSPrepareCmd_OpenDir");
+		cafeExportRegister("coreinit", __FSPrepareCmd_ReadDir, LogType::CoreinitFile);
+		install(0x0105f8ec, "__FSPrepareCmd_ReadDir");
+		cafeExportRegister("coreinit", __FSPrepareCmd_CloseDir, LogType::CoreinitFile);
+		install(0x0105f954, "__FSPrepareCmd_CloseDir");
+		cafeExportRegister("coreinit", __FSPrepareCmd_RewindDir, LogType::CoreinitFile);
+		install(0x0105f920, "__FSPrepareCmd_RewindDir");
+		cafeExportRegister("coreinit", __FSPrepareCmd_MakeDir, LogType::CoreinitFile);
+		install(0x0105f714, "__FSPrepareCmd_MakeDir");
+		cafeExportRegister("coreinit", __FSPrepareCmd_ChangeDir, LogType::CoreinitFile);
+		install(0x0105f458, "__FSPrepareCmd_ChangeDir");
+		cafeExportRegister("coreinit", _FSAStatusToFSStatus, LogType::CoreinitFile);
+		install(0x01067548, "_FSAStatusToFSStatus");
+		cemuLog_log(LogType::Force, "Aroma: Installed Cafe OS private FSA request helpers");
+	}
+
 	void InitializeFS()
 	{
 		sFSInitialized = true;
+		InitializeAromaFSFirmwareABI();
 		sFSShutdown = false;
 		_sdCard01Mounted = false;
 		_mlc01Mounted = false;
@@ -2696,6 +2804,7 @@ namespace coreinit
 		cafeExportRegister("coreinit", FSGetMountSourceNext, LogType::CoreinitFile);
 
 		cafeExportRegister("coreinit", FSMount, LogType::CoreinitFile);
+		cafeExportRegister("coreinit", FSUnmount, LogType::CoreinitFile);
 		cafeExportRegister("coreinit", FSBindMount, LogType::CoreinitFile);
 
 		// client management
@@ -2808,6 +2917,8 @@ namespace coreinit
 		cafeExportRegister("coreinit", FSATruncateFile, LogType::Placeholder);
 		cafeExportRegister("coreinit", FSARemove, LogType::Placeholder);
 		cafeExportRegister("coreinit", FSAReadFile, LogType::Placeholder);
+		cafeExportRegister("coreinit", FSAReadFileWithPos, LogType::Placeholder);
+		cafeExportRegister("coreinit", __FSAShimDecodeIosErrorToFsaStatus, LogType::Placeholder);
 		cafeExportRegister("coreinit", FSAWriteFile, LogType::Placeholder);
 		cafeExportRegister("coreinit", FSAGetStat, LogType::Placeholder);
 		cafeExportRegister("coreinit", FSAGetStatusStr, LogType::Placeholder);

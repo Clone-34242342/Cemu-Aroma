@@ -1,4 +1,6 @@
 add_library(CemuInput
+	api/DRC/DRCInput.cpp
+	api/DRC/DRCInput.h
 	InputManager.cpp
 	InputManager.h
 	ControllerFactory.cpp

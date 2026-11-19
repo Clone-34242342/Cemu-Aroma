@@ -1,4 +1,6 @@
 #include "Cafe/OS/common/OSCommon.h"
+#include "Cafe/OS/libs/coreinit/coreinit.h"
+#include "Cafe/OS/libs/coreinit/coreinit_IM.h"
 
 // APD = Automatic Power Down
 
@@ -121,8 +123,84 @@ namespace coreinit
 		osLib_returnFromFunction(hCPU, IM_ERROR_NONE);
 	}
 
+	// The Wii U Menu subscribes asynchronously to the console's IM events.
+	constexpr uint32 IM_EVENT_SYNC = 1u << 7;
+	constexpr sint32 IM_HANDLE = 1;
+	struct IMNotification
+	{
+		MPTR event{};
+		MPTR callback{};
+		MPTR context{};
+	};
+	static std::mutex s_imMutex;
+	static IMNotification s_imNotification;
+
+	void ResetIM()
+	{
+		std::lock_guard lock(s_imMutex);
+		s_imNotification = {};
+	}
+
+	bool PressConsoleSync()
+	{
+		IMNotification request;
+		{
+			std::lock_guard lock(s_imMutex);
+			request = std::exchange(s_imNotification, {});
+		}
+		if (!request.callback)
+		{
+			cemuLog_log(LogType::Force, "Console SYNC pressed without an active IM subscription");
+			return false;
+		}
+		cemuLog_log(LogType::Force, "Console SYNC delivered to IM callback {:08x}", request.callback);
+		memory_writeU32(request.event, IM_EVENT_SYNC);
+		coreinitAsyncCallback_add(request.callback, 2, IM_ERROR_NONE, request.context);
+		return true;
+	}
+
+	static sint32 IM_Open()
+	{
+		return IM_HANDLE;
+	}
+
+	static sint32 IM_Close(sint32 handle)
+	{
+		if (handle != IM_HANDLE)
+			return -4;
+		ResetIM();
+		return IM_ERROR_NONE;
+	}
+
+	static sint32 IM_GetEventNotify(sint32 handle, MPTR request, MPTR event, MPTR callback, MPTR context)
+	{
+		if (handle != IM_HANDLE || !request || !event || !callback)
+			return -4;
+		std::lock_guard lock(s_imMutex);
+		if (s_imNotification.callback)
+			return -8;
+		s_imNotification = {event, callback, context};
+		cemuLog_log(LogType::Force, "IM event subscription: output {:08x}, callback {:08x}", event, callback);
+		return IM_ERROR_NONE;
+	}
+
+	static sint32 IM_CancelGetEventNotify(sint32 handle, MPTR request, MPTR callback, MPTR context)
+	{
+		if (handle != IM_HANDLE || !request)
+			return -4;
+		ResetIM();
+		if (callback)
+			coreinitAsyncCallback_add(callback, 2, IM_ERROR_NONE, context);
+		return IM_ERROR_NONE;
+	}
+
 	void InitializeIM()
 	{
+		ResetIM();
+		cafeExportRegister("coreinit", IM_Open, LogType::Placeholder);
+		cafeExportRegister("coreinit", IM_Close, LogType::Placeholder);
+		cafeExportRegister("coreinit", IM_GetEventNotify, LogType::Placeholder);
+		cafeExportRegister("coreinit", IM_CancelGetEventNotify, LogType::Placeholder);
 		osLib_addFunction("coreinit", "IMIsAPDEnabledBySysSettings", coreinitExport_IMIsAPDEnabledBySysSettings);
 		osLib_addFunction("coreinit", "IMGetTimeBeforeAPD", coreinitExport_IMGetTimeBeforeAPD);
 		osLib_addFunction("coreinit", "IMGetTimeBeforeDimming", coreinitExport_IMGetTimeBeforeDimming);

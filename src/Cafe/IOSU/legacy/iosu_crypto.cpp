@@ -49,6 +49,14 @@ void iosuCrypto_readSeepromData(void* output, sint32 wordIndex, sint32 size)
 	memcpy(output, seepromMem + wordIndex * 2, size);
 }
 
+bool iosuCrypto_readSeepromBytes(void* output, uint32 wordIndex, uint32 size)
+{
+	if (!hasSeepromMem || !output || wordIndex >= 256 || size > 512 - wordIndex * 2)
+		return false;
+	memcpy(output, seepromMem + wordIndex * 2, size);
+	return true;
+}
+
 bool iosuCrypto_getDeviceId(uint32* deviceId)
 {
 	uint32be deviceIdBE;

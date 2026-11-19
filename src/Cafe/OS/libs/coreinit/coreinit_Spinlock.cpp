@@ -206,11 +206,13 @@ namespace coreinit
 			spinlock->count -= 1;
 			return true;
 		}
-		// release spinlock
-		OSRestoreInterrupts(spinlock->interruptMask);
+		// Native coreinit clears the owner before restoring interrupt scheduling.
+		// Restoring first can let a waiter run while this thread still owns it.
+		const uint32 interruptMask = spinlock->interruptMask;
 		spinlock->interruptMask = 1;
-		while (!spinlock->ownerThread.atomic_compare_exchange(currentThread, nullptr));
 		__OSDeboostThread(currentThread);
+		while (!spinlock->ownerThread.atomic_compare_exchange(currentThread, nullptr));
+		OSRestoreInterrupts(interruptMask);
 		return true;
 	}
 

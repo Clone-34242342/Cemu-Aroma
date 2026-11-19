@@ -82,6 +82,7 @@ std::optional<int> LaunchSettings::HandleCommandline(const std::vector<std::wstr
 		("verbose", "Log to stdout")
 #endif
 
+		("aroma-ftp-port", po::value<unsigned>(), "Map Aroma FTPiiU guest TCP port 21 to this unprivileged host port (1024-65535)")
 		("aroma-plugin", po::wvalue<std::vector<std::wstring>>()->composing(), "Map an Aroma plugin for guest debugging (repeat in startup order)")
 		("aroma-link-modules", po::wvalue<std::wstring>(), "Link Aroma modules from a directory for guest debugging")
 		("game,g", po::wvalue<std::wstring>(), "Path of game to launch")
@@ -100,6 +101,7 @@ std::optional<int> LaunchSettings::HandleCommandline(const std::vector<std::wstr
 		("force-interpreter", po::value<bool>()->implicit_value(true), "Force interpreter CPU emulation, disables recompiler. Useful for debugging purposes where you want to get accurate memory accesses and stack traces.")
 		("force-multicore-interpreter", po::value<bool>()->implicit_value(true), "Force multi-core interpreter CPU emulation, disables recompiler. Only useful for getting stack traces, but slightly faster than the single-core interpreter mode.")
 		("enable-gdbstub", po::value<bool>()->implicit_value(true), "Enable GDB stub to debug executables inside Cemu using an external debugger")
+		("python-debug-start-paused", po::bool_switch(), "Pause before guest system and Aroma startup for Python debugging")
 		("python-debug", po::value<bool>()->implicit_value(true), "Enable the loopback debugger for tools/python/cemu_debug.py (no debugger window)")
 		("open-debugger", po::value<bool>()->implicit_value(true), "Open the PPC debugger window on startup");
 
@@ -163,6 +165,14 @@ std::optional<int> LaunchSettings::HandleCommandline(const std::vector<std::wstr
 				s_aroma_plugin.emplace_back(path);
 		if (vm.count("aroma-link-modules"))
 			s_aroma_module_directory = vm["aroma-link-modules"].as<std::wstring>();
+		if (vm.count("aroma-ftp-port"))
+		{
+			const auto port = vm["aroma-ftp-port"].as<unsigned>();
+			if (port < 1024 || port > 65535)
+				throw std::invalid_argument("--aroma-ftp-port must be in 1024-65535");
+			s_aroma_ftp_port = static_cast<uint16>(port);
+		}
+
 
 		if (vm.count("game"))
 		{
@@ -225,6 +235,10 @@ std::optional<int> LaunchSettings::HandleCommandline(const std::vector<std::wstr
 			s_enable_gdbstub = vm["enable-gdbstub"].as<bool>();
 		if (vm.count("python-debug"))
 			s_enable_gdbstub = vm["python-debug"].as<bool>();
+
+		s_python_debug_start_paused = vm["python-debug-start-paused"].as<bool>();
+		if (s_python_debug_start_paused)
+			s_enable_gdbstub = true;
 
 		if (vm.count("open-debugger"))
 			s_open_debugger = vm["open-debugger"].as<bool>();

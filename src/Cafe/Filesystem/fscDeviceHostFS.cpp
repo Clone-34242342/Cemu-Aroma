@@ -108,12 +108,14 @@ void FSCVirtualFile_Host::fscSetFileLength(uint64 endOffset)
 	if (m_type != FSC_TYPE_FILE)
 		return;
 	m_fs->SetPosition(endOffset);
-	bool r = m_fs->SetEndOfFile();
-	m_seek = std::min(m_seek, endOffset);
-	m_fileSize = m_seek;
-	m_fs->SetPosition(m_seek);
-	if (!r)
+	if (m_fs->SetEndOfFile())
+	{
+		m_seek = std::min(m_seek, endOffset);
+		m_fileSize = endOffset;
+	}
+	else
 		cemuLog_log(LogType::Force, "fscSetFileLength: Failed to set size to 0x{:x}", endOffset);
+	m_fs->SetPosition(m_seek);
 }
 
 bool FSCVirtualFile_Host::fscDirNext(FSCDirEntry* dirEntry)

@@ -9,6 +9,7 @@
 #include "Cafe/OS/libs/coreinit/coreinit.h"
 #include "Cafe/OS/libs/coreinit/coreinit_MEM_ExpHeap.h"
 #include "Common/StackAllocator.h"
+#include "Cafe/Filesystem/fsc.h"
 
 #include <rapidjson/document.h>
 #include <rapidjson/istreamwrapper.h>
@@ -82,6 +83,8 @@ enum class ModuleHookType : uint32
 	AllApplicationStartsDone = 18,
 	AllApplicationEndsDone = 19,
 	AllApplicationRequestsExitDone = 20,
+	GetCustomRPLAllocator = 21,
+	ClearAllocatedRPLMemory = 22,
 	InitThread = 23,
 	InitReentFunctions = 24,
 };
@@ -583,6 +586,8 @@ void LinkModules(const fs::path& directory)
 		for (const auto& entry : declarations.exports)
 		{
 			auto address = entry.address;
+			if (metadata.exportName == "homebrew_kernel" && entry.name == "KernelCopyData" && !entry.isData)
+				address = RPLLoader_MakePPCCallable(CopyGuestPhysicalMemory);
 			if (metadata.exportName == "homebrew_memorymapping")
 			{
 				address = ResolveMappedMemory(entry.name, entry.isData);
@@ -674,6 +679,10 @@ void LinkModules(const fs::path& directory)
 		{
 			switch (static_cast<ModuleHookType>(hook.type))
 			{
+			// Cemu owns RPX/RPL image allocations and releases them at title exit.
+			// These two WUMS loader hooks are not guest application lifecycle hooks.
+			case ModuleHookType::GetCustomRPLAllocator:
+			case ModuleHookType::ClearAllocatedRPLMemory:
 			case ModuleHookType::InitMalloc:
 			case ModuleHookType::FiniMalloc:
 			case ModuleHookType::InitNewlib:
@@ -721,6 +730,24 @@ void LinkModules(const fs::path& directory)
 	for (const auto* module : installationOrder)
 	{
 		InstallImage(module->placement, module->linkedSections);
+		// AromaBaseModule's guest OSDynLoad hooks consult this table directly.
+		// Keep it consistent with the linker/HLE export map (especially mapped
+		// allocator function-pointer slots), rather than exposing console code.
+		for (size_t i = 0; i < module->linkedSections.size(); ++i)
+		{
+			const auto& section = module->linkedSections[i];
+			if (section.name != ".wums.exports")
+				continue;
+			auto* table = reinterpret_cast<uint32be*>(memory_getPointerFromVirtualOffset(module->placement.addresses[i]));
+			for (size_t row = 0; row < section.data.size() / 12; ++row)
+			{
+				const auto* name = MEMPTR<const char>(uint32(table[row * 3 + 1])).GetPtr();
+				const auto found = exports.find(ExportKey(module->metadata.exportName, name, table[row * 3] == 1));
+				if (found != exports.end())
+					table[row * 3 + 2] = found->second;
+			}
+		}
+
 		if (entries)
 		{
 			auto& entry = *entries++;
@@ -762,7 +789,27 @@ void LinkModules(const fs::path& directory)
 	if (canDispatch && !s_pluginHeapAddress)
 		s_pluginHeapAddress = RPLLoader_AllocateBootDataSpace(kPluginHeapSize, 0x1000);
 	if (canDispatch)
+	{
+		const auto kernelCopy = exports.find(ExportKey("homebrew_kernel", "KernelCopyData", false));
+		if (kernelCopy != exports.end())
+			kernelCopy->second = RPLLoader_MakePPCCallable(CopyGuestPhysicalMemory);
+		exports.emplace(ExportKey("homebrew_kernel", "CemuAllocateCodeCave", false),
+			RPLLoader_MakePPCCallable(+[](PPCInterpreter_t* cpu) {
+				const auto size = cpu->gpr[3];
+				if (!size || size > 0x4000)
+					return osLib_returnFromFunction(cpu, 0);
+				const auto cave = RPLLoader_AllocateCodeCaveMem(64, size);
+				if (cave)
+					s_lowDataAllocations.push_back(cave);
+				osLib_returnFromFunction(cpu, cave.GetMPTR());
+			}));
 		s_moduleExports = std::move(exports);
+	}
+}
+
+bool HasNativePluginBackend()
+{
+	return std::ranges::find(s_moduleNames, "homebrew_wupsbackend") != s_moduleNames.end();
 }
 
 uint32 FindModuleHandle(std::string_view name)
@@ -1114,5 +1161,91 @@ void ResetPlugin()
 	}
 	std::lock_guard lock(s_contextMutex);
 	s_contexts.clear();
+}
+}
+
+namespace Aroma
+{
+namespace
+{
+std::mutex s_preparedRPXMutex;
+std::optional<std::vector<uint8>> s_preparedRPX;
+std::optional<uint64> s_preparedRPXTitle;
+bool IsHomebrewWrapper(uint64 titleId)
+{
+	// Mocha substitutes H&S (or Daily Log) with the prepared homebrew image.
+	const auto regionalBase = titleId & ~uint64(0x300);
+	return regionalBase == 0x000500101004e000ull || regionalBase == 0x000500101004b000ull;
+}
+}
+
+bool PrepareHomebrewRPX(std::string_view sdPath, uint32 offset, uint32 size)
+{
+	const fs::path relative(sdPath);
+	if (sdPath.empty() || relative.is_absolute() || sdPath.find('\\') != std::string_view::npos)
+		return false;
+	for (const auto& component : relative)
+		if (component == ".." || component == ".")
+			return false;
+	const std::string path = "/vol/external01/" + relative.generic_string();
+	sint32 status;
+	auto* file = fsc_open(path.c_str(), FSC_ACCESS_FLAG::OPEN_FILE | FSC_ACCESS_FLAG::READ_PERMISSION, &status);
+	if (!file)
+		return false;
+	const uint32 total = fsc_getFileSize(file);
+	if (!size && offset <= total)
+		size = total - offset;
+	if (offset > total || size > total - offset || size < 52 || size > 64 * 1024 * 1024)
+	{
+		fsc_close(file);
+		return false;
+	}
+	std::vector<uint8> bytes(size);
+	fsc_setFileSeek(file, offset);
+	const auto read = fsc_readFile(file, bytes.data(), size);
+	fsc_close(file);
+	constexpr uint8 magic[] = {0x7f, 'E', 'L', 'F', 1, 2, 1, 0xca, 0xfe};
+	if (read != size || memcmp(bytes.data(), magic, sizeof(magic)) ||
+		bytes[16] != 0xfe || bytes[17] != 1 || bytes[18] != 0 || bytes[19] != 20)
+		return false;
+	std::lock_guard lock(s_preparedRPXMutex);
+	s_preparedRPX = std::move(bytes);
+	s_preparedRPXTitle.reset();
+	cemuLog_log(LogType::Force, "Aroma Mocha: Prepared SD RPX {} ({} bytes at offset {})", sdPath, size, offset);
+	return true;
+}
+
+void CancelPreparedHomebrewRPX()
+{
+	std::lock_guard lock(s_preparedRPXMutex);
+	s_preparedRPX.reset();
+	s_preparedRPXTitle.reset();
+}
+
+bool HasPreparedHomebrewWrapper(uint64 titleId)
+{
+	std::lock_guard lock(s_preparedRPXMutex);
+	return IsHomebrewWrapper(titleId) && s_preparedRPX.has_value();
+}
+
+bool ArmPreparedHomebrewRPX(uint64 wrapperTitleId, uint64 currentTitleId)
+{
+	std::lock_guard lock(s_preparedRPXMutex);
+	if (!IsHomebrewWrapper(wrapperTitleId) || !s_preparedRPX)
+		return false;
+	s_preparedRPXTitle = currentTitleId;
+	cemuLog_log(LogType::Force, "Aroma Mocha: Homebrew wrapper reload retains title {:016x} content and saves", currentTitleId);
+	return true;
+}
+
+std::optional<std::vector<uint8>> TakePreparedHomebrewRPX(uint64 titleId)
+{
+	std::lock_guard lock(s_preparedRPXMutex);
+	if (!s_preparedRPXTitle)
+		return std::nullopt;
+	auto result = *s_preparedRPXTitle == titleId ? std::move(s_preparedRPX) : std::nullopt;
+	s_preparedRPXTitle.reset();
+	s_preparedRPX.reset();
+	return result;
 }
 }

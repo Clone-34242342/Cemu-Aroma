@@ -1,6 +1,8 @@
+#include "Cafe/Aroma/WupsLoader.h"
 #include "Cafe/OS/common/OSCommon.h"
 #include "sysapp.h"
 #include "Cafe/CafeSystem.h"
+#include "Cafe/TitleList/TitleList.h"
 #include "Cafe/OS/libs/coreinit/coreinit_FG.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Misc.h"
 
@@ -651,6 +653,27 @@ namespace sysapp
 		coreinit::ScheduleTitleLaunch(titleId);
 	}
 
+	struct SettingsArgsIn
+	{
+		sysStandardArguments_t stdArgs;
+		uint32be jumpTo;
+		uint32be firstBootKind;
+	};
+	static_assert(sizeof(SettingsArgsIn) == 0x10);
+
+	void _SYSLaunchSettings(SettingsArgsIn* args)
+	{
+		coreinit::__OSClearCopyData();
+		if (args)
+		{
+			_SYSSerializeStandardArgsIn(&args->stdArgs);
+			SYSSerializeSysArgs("jump_to", reinterpret_cast<char*>(&args->jumpTo), 4);
+			SYSSerializeSysArgs("first_boot_kind", reinterpret_cast<char*>(&args->firstBootKind), 4);
+		}
+		_SYSAppendCallerInfo();
+		coreinit::ScheduleTitleLaunch(::_SYSGetSystemApplicationTitleId(1));
+	}
+
 	struct EManualArgs
 	{
 		sysStandardArguments_t stdArgs;
@@ -672,8 +695,20 @@ namespace sysapp
 		_SYSSwitchToEManual(&args);
 	}
 
+	bool SYSCheckTitleExists(uint64 titleId)
+	{
+		if (Aroma::HasPreparedHomebrewWrapper(titleId))
+			return true;
+		if (titleId == CafeSystem::GetForegroundTitleId())
+			return true;
+		uint16 version = 0;
+		return CafeTitleList::HasTitle(titleId, version);
+	}
+
 	void load()
 	{
+		cafeExportRegister("sysapp", _SYSLaunchSettings, LogType::Placeholder);
+		cafeExportRegister("sysapp", SYSCheckTitleExists, LogType::Placeholder);
 		cafeExportRegisterFunc(SYSClearSysArgs, "sysapp", "SYSClearSysArgs", LogType::Placeholder);
 		cafeExportRegisterFunc(_SYSLaunchTitleByPathFromLauncher, "sysapp", "_SYSLaunchTitleByPathFromLauncher", LogType::Placeholder);
 		cafeExportRegisterFunc(SYSRelaunchTitle, "sysapp", "SYSRelaunchTitle", LogType::Placeholder);

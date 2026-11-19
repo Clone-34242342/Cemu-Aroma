@@ -3,6 +3,7 @@
 #include "HW/Latte/Core/LattePM4.h"
 #include "OS/libs/coreinit/coreinit_Time.h"
 #include "Common/CafeStaticVar.h"
+#include <condition_variable>
 
 namespace TCL
 {
@@ -72,6 +73,8 @@ namespace TCL
 	std::atomic<uint32> tclRingBufferA[TCL_RING_BUFFER_SIZE];
 	std::atomic<uint32> tclRingBufferA_readIndex{0};
 	std::atomic<uint32> tclRingBufferA_writeIndex{0};
+	static std::mutex s_ringWaitMutex;
+	static std::condition_variable s_ringWait;
 
 	// GPU code calls this to grab the next command word
 	bool TCLGPUReadRBWord(uint32& cmdWord)
@@ -83,6 +86,16 @@ namespace TCL
 		cmdWord = tclRingBufferA[readIndex].load(std::memory_order::relaxed);
 		tclRingBufferA_readIndex.store((readIndex + 1) % TCL_RING_BUFFER_SIZE, std::memory_order::release);
 		return true;
+	}
+
+	void TCLGPUWaitForRBWord()
+	{
+		std::unique_lock lock(s_ringWaitMutex);
+		// Wake periodically for VSync and other work independent of the ring.
+		s_ringWait.wait_for(lock, std::chrono::microseconds(100), [] {
+			return tclRingBufferA_readIndex.load(std::memory_order::relaxed)
+				!= tclRingBufferA_writeIndex.load(std::memory_order::acquire);
+		});
 	}
 
 	void TCLWaitForRBSpace(uint32be numU32s)
@@ -114,7 +127,11 @@ namespace TCL
 			cmdLen--;
 		}
 
-		tclRingBufferA_writeIndex.store(writeIndex, std::memory_order::release);
+		{
+			std::lock_guard lock(s_ringWaitMutex);
+			tclRingBufferA_writeIndex.store(writeIndex, std::memory_order::release);
+		}
+		s_ringWait.notify_one();
 	}
 
 	#define EVENT_TYPE_TS		5

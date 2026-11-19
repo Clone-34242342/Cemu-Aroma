@@ -289,6 +289,10 @@ GDBServer::~GDBServer()
 
 bool GDBServer::Initialize()
 {
+	// Title reloads reuse this debugger and its listener. Rebinding would
+	// discard the live socket and disable Python debugging during WiiLoad.
+	if (m_server_socket != INVALID_SOCKET && m_thread.joinable())
+		return true;
 	cemuLog_createLogFile(false);
 
 	if (m_server_socket = socket(PF_INET, SOCK_STREAM, 0); m_server_socket == SOCKET_ERROR)

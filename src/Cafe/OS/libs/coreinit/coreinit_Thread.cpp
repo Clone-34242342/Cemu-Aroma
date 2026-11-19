@@ -1,3 +1,4 @@
+#include <unordered_map>
 #include "Cafe/OS/common/OSCommon.h"
 #include "Cafe/Aroma/WupsLoader.h"
 #include "Cafe/HW/Espresso/PPCCallback.h"
@@ -133,10 +134,35 @@ namespace coreinit
 
 
 	// add thread to active queue
+	// OSSetThreadRunQuantum takes microseconds (0 means no voluntary quantum).
+	// Cemu schedules using Espresso instruction-cycle budgets.
+	std::unordered_map<OSThread_t*, uint32> s_threadQuantumOverrides;
+
+	uint32 ThreadTimesliceBudget(OSThread_t* thread)
+	{
+		__OSLockScheduler();
+		const auto found = s_threadQuantumOverrides.find(thread);
+		const auto budget = found == s_threadQuantumOverrides.end() ? ppcThreadQuantum : found->second;
+		__OSUnlockScheduler();
+		return budget;
+	}
+
+	bool OSSetThreadRunQuantum(OSThread_t* thread, uint32 quantumUS)
+	{
+		if (!thread || (quantumUS && (quantumUS < 10 || quantumUS > 0xfffff)))
+			return false;
+		const uint64 cycles = quantumUS ? uint64(quantumUS) * ESPRESSO_CORE_CLOCK / 1000000 : uint64(INT32_MAX / 2);
+		__OSLockScheduler();
+		s_threadQuantumOverrides[thread] = static_cast<uint32>(std::min<uint64>(cycles, INT32_MAX / 2));
+		__OSUnlockScheduler();
+		return true;
+	}
+
 	void __OSActivateThread(OSThread_t* thread)
 	{
 		cemu_assert_debug(__OSHasSchedulerLock());
 
+		s_threadQuantumOverrides.erase(thread);
 		g_activeThreadQueue->addThread(thread, &thread->activeThreadChain); // todo - check if thread already in queue
 
 		MPTR threadMPTR = memory_getVirtualOffsetFromPointer(thread);
@@ -184,6 +210,7 @@ namespace coreinit
 		cemu_assert_debug(noHit == false);
 		srwlock_activeThreadList.UnlockWrite();
 		
+		s_threadQuantumOverrides.erase(thread);
 		g_activeThreadQueue->removeThread(thread, &thread->activeThreadChain); // todo - check if thread in queue
 		
 		cemu_assert_debug(thread->state == OSThread_t::THREAD_STATE::STATE_NONE);
@@ -1174,7 +1201,7 @@ namespace coreinit
 		OSSetCurrentThread(OSGetCoreId(), thread);
 		__OSThreadLoadContext(hCPU, thread);
 		thread->context.upir = coreIndex;
-		thread->quantumTicks = ppcThreadQuantum;
+		thread->quantumTicks = ThreadTimesliceBudget(thread);
 		// statistics
 		thread->wakeUpTime = PPCInterpreter_getMainCoreCycleCounter();
 		thread->wakeUpCount = thread->wakeUpCount + 1;
@@ -1186,7 +1213,8 @@ namespace coreinit
 	{
 		uint32 coreIndex = PPCInterpreter_getCoreIndex(hCPU);
 		// run one timeslice
-		hCPU->remainingCycles = ppcThreadQuantum;
+		hCPU->remainingCycles = ThreadTimesliceBudget(thread);
+		thread->quantumTicks = hCPU->remainingCycles;
 		hCPU->skippedCycles = 0;
 		// we add a slight randomized variance to the thread quantum to avoid getting stuck in repeated code sequences where one or multiple threads always unload inside a lock
 		// this was seen in Mario Party 10 during early boot where several OSLockMutex operations would align in such a way that one thread would never successfully acquire the lock
@@ -1602,6 +1630,7 @@ namespace coreinit
 		cafeExportRegister("coreinit", OSCreateThreadType, LogType::CoreinitThread);
 		cafeExportRegister("coreinit", OSCreateThread, LogType::CoreinitThread);
 		cafeExportRegister("coreinit", __OSCreateThreadType, LogType::CoreinitThread);
+		cafeExportRegister("coreinit", OSSetThreadRunQuantum, LogType::CoreinitThread);
 		cafeExportRegister("coreinit", OSExitThread, LogType::CoreinitThread);
 
 		cafeExportRegister("coreinit", OSGetCurrentThread, LogType::CoreinitThread);

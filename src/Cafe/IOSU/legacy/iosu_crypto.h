@@ -1,6 +1,8 @@
 #pragma once
 
 void iosuCrypto_init();
+// BSP EE reads: reject missing console data and requests outside the 512-byte EEPROM.
+bool iosuCrypto_readSeepromBytes(void* output, uint32 wordIndex, uint32 size);
 
 bool iosuCrypto_getDeviceId(uint32* deviceId);
 void iosuCrypto_getDeviceSerialString(char* serialString);

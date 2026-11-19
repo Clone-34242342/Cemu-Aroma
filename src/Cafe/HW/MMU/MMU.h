@@ -22,6 +22,7 @@ enum class MMU_MEM_AREA_ID
 {
 	CODE_LOW0,
 	CODE_TRAMPOLINE,
+	CODE_COREINIT,
 	CODE_CAVE,
 	CODE_MAIN,
 	MEM2_DATA,
@@ -279,3 +280,5 @@ namespace MMU
 }
 
 #define MMU_IsInPPCMemorySpace(__ptr) ((const uint8*)(__ptr) >= memory_base && (const uint8*)(__ptr) < (memory_base + 0x100000000))
+
+extern MMURange mmuRange_COREINIT_COMPAT;

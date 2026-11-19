@@ -2,6 +2,7 @@
 #include "Cafe/HW/Espresso/PPCCallback.h"
 #include "Cafe/OS/libs/padscore/padscore.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Time.h"
+#include "Cafe/OS/libs/coreinit/coreinit.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Alarm.h"
 #include "Cafe/OS/libs/coreinit/coreinit_SystemInfo.h"
 #include "WindowSystem.h"
@@ -668,6 +669,52 @@ namespace padscore
 		osLib_returnFromFunction(hCPU, new_max_count);
 	}
 
+	// Guest pairing UI state. Host Bluetooth discovery is independent of this state.
+	static MPTR s_wpadSyncCallback = 0;
+	static std::chrono::steady_clock::time_point s_wpadSyncDeadline{};
+	static std::mutex s_wpadSyncMutex;
+
+	static MPTR WPADSetSyncDeviceCallback(MPTR callback)
+	{
+		std::lock_guard lock(s_wpadSyncMutex);
+		return std::exchange(s_wpadSyncCallback, callback);
+	}
+
+	static bool WPADIsBusyForSync()
+	{
+		std::lock_guard lock(s_wpadSyncMutex);
+		return std::chrono::steady_clock::now() < s_wpadSyncDeadline;
+	}
+
+	static bool WPADStartSyncDevice()
+	{
+		std::lock_guard lock(s_wpadSyncMutex);
+		if (std::chrono::steady_clock::now() < s_wpadSyncDeadline)
+			return false;
+		s_wpadSyncDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+		if (s_wpadSyncCallback)
+			coreinitAsyncCallback_add(s_wpadSyncCallback, 2, 0, 0);
+		cemuLog_log(LogType::Force, "WPAD controller sync window started");
+		return true;
+	}
+
+	static bool WPADCancelSyncDevice()
+	{
+		std::lock_guard lock(s_wpadSyncMutex);
+		const bool wasActive = std::chrono::steady_clock::now() < s_wpadSyncDeadline;
+		s_wpadSyncDeadline = {};
+		if (wasActive && s_wpadSyncCallback)
+			coreinitAsyncCallback_add(s_wpadSyncCallback, 2, 1, 0);
+		return wasActive;
+	}
+
+	static void ResetWPADSyncState()
+	{
+		std::lock_guard lock(s_wpadSyncMutex);
+		s_wpadSyncCallback = 0;
+		s_wpadSyncDeadline = {};
+	}
+
 	void export_WPADInit()
 	{
 		if (g_wpad_state != kWPADStateShutdown)
@@ -806,6 +853,7 @@ namespace padscore
 
 		void RPLUnmapped() override
 		{
+			ResetWPADSyncState();
 			coreinit::OSCancelAlarm(g_padscore.alarm.GetPtr());
 			s_padscoreStaticData.Deallocate();
 		}
@@ -830,6 +878,10 @@ namespace padscore
 			cafeExportRegister("padscore", WPADIsMplsAttached, LogType::InputAPI);
 			cafeExportRegister("padscore", WPADGetAccGravityUnit, LogType::InputAPI);
 
+			cafeExportRegister("padscore", WPADStartSyncDevice, LogType::InputAPI);
+			cafeExportRegister("padscore", WPADIsBusyForSync, LogType::InputAPI);
+			cafeExportRegister("padscore", WPADCancelSyncDevice, LogType::InputAPI);
+			cafeExportRegister("padscore", WPADSetSyncDeviceCallback, LogType::InputAPI);
 			// wpad
 			//osLib_addFunction("padscore", "WPADInit", padscore::export_WPADInit);
 

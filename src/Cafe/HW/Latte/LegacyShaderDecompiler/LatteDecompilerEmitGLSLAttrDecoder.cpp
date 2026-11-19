@@ -307,6 +307,10 @@ void LatteDecompiler_emitAttributeDecodeGLSL(LatteDecompilerShader* shaderContex
 			// seen in One Piece
 			src->addFmt("attrDecoder.xyzw = floatBitsToInt(vec4(attrDataSem{}.xyzw));" _CRLF, attributeInputIndex);
 		}
+		else if (attrib->format == Latte::E_HWFMT::HWFMT_8_8_8_8 && attrib->nfa == 2 && attrib->isSigned != 0)
+		{
+			src->addFmt("attrDecoder = floatBitsToUint(vec4(bitfieldExtract(ivec4(attrDataSem{}.xyzw), 0, 8)));" _CRLF, attributeInputIndex);
+		}
 		else if (attrib->format == Latte::E_HWFMT::HWFMT_8_8 && attrib->nfa == 0 && attrib->isSigned == 0)
 		{
 			if( (attrib->offset&3) == 2 && LatteGPUState.glVendor == GLVENDOR_AMD && g_renderer->GetType() == RendererAPI::OpenGL )

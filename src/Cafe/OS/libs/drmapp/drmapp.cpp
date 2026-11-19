@@ -9,6 +9,12 @@ namespace drmapp
 		return 1;
 	}
 
+	uint32 NupChkIsSyncButtonAllowed()
+	{
+		// Cemu does not run a console system update that could inhibit SYNC.
+		return 1;
+	}
+
 	uint32 PatchChkIsFinished()
 	{
 		cemuLog_logDebug(LogType::Force, "drmapp.PatchChkIsFinished() - placeholder");
@@ -38,6 +44,7 @@ namespace drmapp
 		void RPLMapped() override
 		{
 			cafeExportRegisterFunc(NupChkIsFinished, "drmapp", "NupChkIsFinished__3RplFv", LogType::Placeholder);
+			cafeExportRegisterFunc(NupChkIsSyncButtonAllowed, "drmapp", "NupChkIsSyncButtonAllowed__3RplFv", LogType::Placeholder);
 			cafeExportRegisterFunc(PatchChkIsFinished, "drmapp", "PatchChkIsFinished__3RplFv", LogType::Placeholder);
 			cafeExportRegisterFunc(AocChkIsFinished, "drmapp", "AocChkIsFinished__3RplFv", LogType::Placeholder);
 			cafeExportRegisterFunc(TicketChkIsFinished, "drmapp", "TicketChkIsFinished__3RplFv", LogType::Placeholder);

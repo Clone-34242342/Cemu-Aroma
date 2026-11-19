@@ -1,5 +1,6 @@
 #include "Cafe/OS/common/OSCommon.h"
 #include "nsysnet.h"
+#include "config/LaunchSettings.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Thread.h"
 #include "Cafe/IOSU/legacy/iosu_crypto.h"
 #include "Cafe/OS/libs/coreinit/coreinit_Time.h"
@@ -197,6 +198,7 @@ typedef struct
 	bool isExternal;
 	// socket options
 	bool isNonBlocking;
+	uint16 guestBoundPort; // preserves getsockname after explicit FTP port forwarding
 }virtualSocket_t;
 
 typedef struct
@@ -865,7 +867,21 @@ void nsysnetExport_bind(PPCInterpreter_t* hCPU)
 		sockaddr hostAddr;
 		hostAddr.sa_family = _swapEndianU16(addr->sa_family);
 		memcpy(hostAddr.sa_data, addr->sa_data, 14);
+		const auto ftpPort = LaunchSettings::AromaFTPPort();
+		const bool forwardFTP = LaunchSettings::AromaEnabled() && ftpPort &&
+			vs->type == WU_SOCK_STREAM && hostAddr.sa_family == AF_INET &&
+			static_cast<uint8>(hostAddr.sa_data[0]) == 0 && static_cast<uint8>(hostAddr.sa_data[1]) == 21;
+		if (forwardFTP)
+		{
+			hostAddr.sa_data[0] = static_cast<char>(*ftpPort >> 8);
+			hostAddr.sa_data[1] = static_cast<char>(*ftpPort & 255);
+		}
 		sint32 hr = bind(vs->s, &hostAddr, sizeof(sockaddr));
+		if (forwardFTP && hr == 0)
+		{
+			vs->guestBoundPort = 21;
+			cemuLog_log(LogType::Force, "Aroma FTPiiU: guest TCP 21 is listening on host TCP {}", *ftpPort);
+		}
 		r = _translateError(hr, GETLASTERR);
 
 
@@ -1308,6 +1324,11 @@ void nsysnetExport_getsockname(PPCInterpreter_t* hCPU)
 		{
 			addr->sa_family = _swapEndianU16(hostAddr.sa_family);
 			memcpy(addr->sa_data, hostAddr.sa_data, 14);
+			if (vs->guestBoundPort)
+			{
+				addr->sa_data[0] = static_cast<uint8>(vs->guestBoundPort >> 8);
+				addr->sa_data[1] = static_cast<uint8>(vs->guestBoundPort & 255);
+			}
 		}
 		else
 		{

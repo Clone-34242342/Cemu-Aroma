@@ -1,3 +1,4 @@
+#include "Cafe/OS/libs/coreinit/coreinit.h"
 #include "Cafe/Aroma/WupsLoader.h"
 #include "Cafe/OS/common/OSCommon.h"
 #include "WindowSystem.h"
@@ -150,6 +151,16 @@ void LoadMainExecutable()
 	// extract and load RPX
 	uint32 rpxSize = 0;
 	uint8* rpxData = fsc_extractFile(_pathToExecutable.c_str(), &rpxSize);
+	if (auto prepared = Aroma::TakePreparedHomebrewRPX(CafeSystem::GetForegroundTitleId()))
+	{
+		free(rpxData);
+		rpxSize = static_cast<uint32>(prepared->size());
+		rpxData = static_cast<uint8*>(malloc(rpxSize));
+		if (rpxData)
+			memcpy(rpxData, prepared->data(), rpxSize);
+		cemuLog_log(LogType::Force, "Aroma Mocha: Loading prepared executable ({} bytes); existing assets and save identity retained", rpxSize);
+	}
+
 	if (rpxData == nullptr)
 	{
 		cemuLog_log(LogType::Force, "Failed to load \"{}\"", _pathToExecutable);
@@ -198,7 +209,7 @@ void LoadMainExecutable()
 fs::path getTitleSavePath()
 {
 	const uint64 titleId = CafeSystem::GetForegroundTitleId();
-	return ActiveSettings::GetMlcPath("usr/save/{:08X}/{:08X}/user/", (uint32)(titleId >> 32), (uint32)(titleId & 0xFFFFFFFF));
+	return ActiveSettings::GetMlcPath("usr/save/{:08x}/{:08x}/user/", (uint32)(titleId >> 32), (uint32)(titleId & 0xFFFFFFFF));
 }
 
 void InfoLog_TitleLoaded()
@@ -403,6 +414,9 @@ void cemu_initForGame()
 			cemuLog_log(LogType::Force, "WUMS: {}", error.what());
 		}
 	}
+	if (Aroma::HasNativePluginBackend())
+		cemuLog_log(LogType::Force, "Aroma: Guest WUPS backend owns plugin discovery and loading from the emulated SD");
+	else
 	for (const auto& plugin : LaunchSettings::AromaPlugins())
 	{
 		try { Aroma::MapPlugin(plugin); }
@@ -431,7 +445,8 @@ void cemu_initForGame()
 	// check for debugger entrypoint bp
     if (g_gdbstub)
     {
-        g_gdbstub->HandleEntryStop(_entryPoint);
+        g_gdbstub->HandleEntryStop(LaunchSettings::PythonDebugStartPaused()
+            ? PPCInterpreter_makeCallableExportDepr(coreinit_start) : _entryPoint);
         if (!g_gdbstub->Initialize())
         {
             cemuLog_log(LogType::Force, "[GDBStub] Could not start debugger listener; continuing without the entry breakpoint");

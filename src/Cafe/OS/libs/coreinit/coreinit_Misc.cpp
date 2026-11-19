@@ -688,6 +688,12 @@ namespace coreinit
 		return s_currentTitleId;
 	}
 
+	uint64 OSGetOSID()
+	{
+		// Retail Cafe OS firmware identity used by Cemu's HLE environment.
+		return 0x000500101000400Aull;
+	}
+
 	uint32 s_sdkVersion;
 
 	uint32 __OSGetProcessSDKVersion()
@@ -811,6 +817,8 @@ namespace coreinit
 
 	void ScheduleTitleLaunch(uint64 titleId)
 	{
+		if (Aroma::ArmPreparedHomebrewRPX(titleId, CafeSystem::GetForegroundTitleId()))
+			titleId = CafeSystem::GetForegroundTitleId();
 		s_scheduledTitle.store(titleId);
 		s_sendLaunchExitMessage.store(titleId != 0);
 	}
@@ -931,6 +939,7 @@ namespace coreinit
 		cafeExportRegister("coreinit", OSGetPFID, LogType::Placeholder);
 		cafeExportRegister("coreinit", OSGetUPID, LogType::Placeholder);
 		cafeExportRegister("coreinit", OSGetTitleID, LogType::Placeholder);
+		cafeExportRegister("coreinit", OSGetOSID, LogType::Placeholder);
 		cafeExportRegister("coreinit", __OSGetProcessSDKVersion, LogType::Placeholder);
 
 		g_homeButtonMenuEnabled = true; // enabled by default

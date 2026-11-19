@@ -122,8 +122,15 @@ namespace coreinit
 
 	MPTR OSEffectiveToPhysical(MPTR effectiveAddr)
 	{
+		if (!memory_isAddressRangeAccessible(effectiveAddr, 1))
+			return MPTR_NULL;
 		MPTR physicalAddr = memory_virtualToPhysical(effectiveAddr);
 		return physicalAddr;
+	}
+
+	bool OSIsAddressValid(uint32 address)
+	{
+		return memory_isAddressRangeAccessible(address, 1);
 	}
 
 	void OSMemoryBarrier()
@@ -202,6 +209,7 @@ namespace coreinit
 
 	void InitializeMemory()
 	{
+		cafeExportRegister("coreinit", OSIsAddressValid, LogType::Placeholder);
 		cafeExportRegister("coreinit", DCInvalidateRange, LogType::Placeholder);
 		cafeExportRegister("coreinit", DCFlushRange, LogType::Placeholder);
 		cafeExportRegister("coreinit", DCFlushRangeNoSync, LogType::Placeholder);

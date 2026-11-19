@@ -20,6 +20,7 @@ public:
 	static fs::path AromaEnvironmentDirectory();
 	static std::optional<fs::path> AromaModuleDirectory();
 	static bool AromaEnabled();
+	static std::optional<uint16> AromaFTPPort() { return s_aroma_ftp_port; }
 	static std::optional<fs::path> GetLoadFile() { return s_load_game_file; }
 	static std::optional<uint64> GetLoadTitleID() {return s_load_title_id;}
 	static std::optional<fs::path> GetMLCPath() { return s_mlc_path; }
@@ -34,6 +35,7 @@ public:
 	static void ClearCosArgstr() { s_cos_argstr.reset(); }
 	static std::unordered_map<fs::path, std::wstring>& CosMounts() { return s_cos_mounts; }
 
+	static bool PythonDebugStartPaused() { return s_python_debug_start_paused; }
 	static bool GDBStubEnabled() { return s_enable_gdbstub; }
 	static bool OpenDebuggerEnabled() { return s_open_debugger; }
 	static bool NSightModeEnabled() { return s_nsight_mode; }
@@ -49,6 +51,7 @@ public:
 private:
 	inline static std::vector<fs::path> s_aroma_plugin{};
 	inline static std::optional<fs::path> s_aroma_module_directory{};
+	inline static std::optional<uint16> s_aroma_ftp_port{};
 	inline static std::optional<fs::path> s_load_game_file{};
 	inline static std::optional<uint64> s_load_title_id{};
 	inline static std::optional<fs::path> s_mlc_path{};
@@ -63,6 +66,7 @@ private:
 	inline static std::unordered_map<fs::path, std::wstring> s_cos_mounts{};
 
 	inline static bool s_enable_gdbstub = false;
+	inline static bool s_python_debug_start_paused = false;
 	inline static bool s_open_debugger = false;
 	inline static bool s_nsight_mode = false;
 

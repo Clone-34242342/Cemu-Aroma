@@ -3,4 +3,6 @@
 namespace coreinit
 {
 	void InitializeIM();
+	void ResetIM();
+	bool PressConsoleSync();
 };

@@ -1,5 +1,7 @@
 #include "Cafe/OS/common/OSCommon.h"
 #include "Cafe/OS/libs/coreinit/coreinit_MessageQueue.h"
+#include "Cafe/OS/libs/coreinit/coreinit_FS.h"
+#include "Cafe/OS/RPL/rpl.h"
 
 namespace coreinit
 {
@@ -124,8 +126,57 @@ namespace coreinit
 		return g_systemMessageQueue.GetPtr();
 	}
 
+	CafeStaticVar<OSMessageQueue> s_appIOQueue{g_coreinitStaticData};
+	CafeStaticVar<OSMessage, 64> s_appIOMessages{g_coreinitStaticData};
+	CafeStaticVar<OSThread_t> s_appIOThread{g_coreinitStaticData};
+	CafeStaticVar<uint8, 0x10000, 32> s_appIOStack{g_coreinitStaticData};
+	bool s_appIOStarted = false;
+
+	static void AppIOThreadEntry(PPCInterpreter_t* cpu)
+	{
+		OSMessage message{};
+		for (;;)
+		{
+			OSReceiveMessage(s_appIOQueue.GetPtr(), &message, OS_MESSAGE_BLOCK);
+			// FSMessage places its function type in the final OSMessage word.
+			if (message.data2 != 8 || message.message == 0)
+			{
+				cemuLog_log(LogType::Force, "AppIO: Unsupported completion type {}", uint32(message.data2));
+				continue;
+			}
+			auto* result = MEMPTR<FSAsyncResult>(uint32(message.message)).GetPtr();
+			// Copy before invoking guest code: it may immediately reuse the command block.
+			const FSAsyncResult completion = *result;
+			if (completion.fsAsyncParamsNew.userCallback)
+				PPCCoreCallback(completion.fsAsyncParamsNew.userCallback, completion.fsClient.GetPtr(),
+					completion.fsCmdBlock.GetPtr(), sint32(uint32(completion.fsStatusNew)),
+					completion.fsAsyncParamsNew.userContext);
+		}
+	}
+
+	OSMessageQueue* OSGetDefaultAppIOQueue()
+	{
+		__OSLockScheduler();
+		if (!s_appIOStarted)
+		{
+			const auto size = s_appIOStack.GetByteSize();
+			s_appIOStarted = __OSCreateThreadType(s_appIOThread.GetPtr(),
+				RPLLoader_MakePPCCallable(AppIOThreadEntry), 0, nullptr,
+				s_appIOStack.GetPtr() + size, size, 16, 7, OSThread_t::THREAD_TYPE::TYPE_APP);
+			if (s_appIOStarted)
+				OSResumeThread(s_appIOThread.GetPtr());
+			else
+				cemuLog_log(LogType::Force, "AppIO: Could not create completion thread");
+		}
+		__OSUnlockScheduler();
+		return s_appIOStarted ? s_appIOQueue.GetPtr() : nullptr;
+	}
+
 	void InitializeMessageQueue()
 	{
+		s_appIOStarted = false;
+		OSInitMessageQueue(s_appIOQueue.GetPtr(), s_appIOMessages.GetPtr(), s_appIOMessages.GetCount());
+		cafeExportRegister("coreinit", OSGetDefaultAppIOQueue, LogType::CoreinitThread);
 		OSInitMessageQueue(g_systemMessageQueue.GetPtr(), _systemMessageQueueArray.GetPtr(), _systemMessageQueueArray.GetCount());
 
 		cafeExportRegister("coreinit", OSInitMessageQueueEx, LogType::CoreinitThread);

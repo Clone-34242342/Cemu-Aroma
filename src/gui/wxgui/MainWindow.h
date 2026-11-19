@@ -1,5 +1,7 @@
 #pragma once
 
+#include <set>
+
 #include <wx/wx.h>
 #include <wx/dataview.h>
 #include <wx/infobar.h>
@@ -102,6 +104,7 @@ public:
 	void OnFileExit(wxCommandEvent& event);
 	void OnNFCMenu(wxCommandEvent& event);
 	void OnOptionsInput(wxCommandEvent& event);
+	void SetEmulationPaused(bool pause);
 	void OnAccountSelect(wxCommandEvent& event);
 	void OnConsoleLanguage(wxCommandEvent& event);
 	void OnHelpAbout(wxCommandEvent& event);
@@ -180,6 +183,11 @@ private:
 
 	bool m_menu_visible = false;
 	bool m_game_launched = false;
+	bool m_emulationPaused = false;
+	std::set<MPTR> m_pauseThreads;
+#if BOOST_OS_LINUX
+    wxTimer m_globalPauseTimer;
+#endif
 
 	#ifdef ENABLE_DISCORD_RPC
 	std::unique_ptr<DiscordPresence> m_discord;

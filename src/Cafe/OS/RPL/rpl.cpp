@@ -41,6 +41,15 @@ PPCCodeHeap rplLoaderHeap_lowerAreaCodeMem2(nullptr, MEMORY_CODE_TRAMPOLINE_AREA
 PPCCodeHeap rplLoaderHeap_codeArea2(nullptr, MEMORY_CODEAREA_SIZE);
 
 ChunkedFlatAllocator<64 * 1024> g_heapTrampolineArea;
+// Separate the relocated test title from normal system module allocations.
+constexpr uint32 kCakeTestText = 0x0e180000;
+constexpr uint32 kCakeTestData = 0x10502200;
+static PPCCodeHeap s_cakeTestHeap(nullptr, 0x00c00000);
+
+static bool UsesCakeTestTextHeap(std::string_view name)
+{
+	return std::getenv("CEMU_CAKE_TEST_LAYOUT") && (name == "turbo" || name == "cake_returns");
+}
 
 std::vector<RPLDependency*> s_rplDependencyList;
 std::vector<RPLModule*> s_rplModuleList;
@@ -543,9 +552,16 @@ bool RPLLoader_LoadSections(sint32 aProcId, RPLModule* rplLoaderContext)
 	uint32 regionLoaderinfoSize = regionMappingTable.region[RPL_MAPPING_REGION_LOADERINFO].endAddress - regionMappingTable.region[RPL_MAPPING_REGION_LOADERINFO].baseAddress;
 	uint32 regionTextSize = regionMappingTable.region[RPL_MAPPING_REGION_TEXT].endAddress - regionMappingTable.region[RPL_MAPPING_REGION_TEXT].baseAddress;
 
-	rplLoaderContext->regionMappingBase_data = RPLLoader_AllocateDataSpace(rplLoaderContext, regionDataSize, 0x1000);
+	const bool cakeLayout = std::getenv("CEMU_CAKE_TEST_LAYOUT") && rplLoaderContext->moduleName == "turbo";
+	if (cakeLayout && !rplLoader_applicationHasMemoryControl &&
+	    rplLoader_currentDataAllocatorAddr < kCakeTestData)
+		rplLoader_currentDataAllocatorAddr = kCakeTestData;
+	rplLoaderContext->regionMappingBase_data = RPLLoader_AllocateDataSpace(rplLoaderContext, regionDataSize, cakeLayout ? 0x200 : 0x1000);
 	rplLoaderContext->regionMappingBase_loaderInfo = RPLLoader_AllocateDataSpace(rplLoaderContext, regionLoaderinfoSize, 0x1000);
-	rplLoaderContext->regionMappingBase_text = rplLoaderHeap_codeArea2.alloc(regionTextSize + 0x1000, 0x1000);
+	if (cakeLayout)
+		s_cakeTestHeap.setHeapBase(memory_getPointerFromVirtualOffset(kCakeTestText));
+	auto& textHeap = UsesCakeTestTextHeap(rplLoaderContext->moduleName) ? s_cakeTestHeap : rplLoaderHeap_codeArea2;
+	rplLoaderContext->regionMappingBase_text = textHeap.alloc(regionTextSize + 0x1000, 0x1000);
 	rplLoader_maxCodeAddress = std::max(rplLoader_maxCodeAddress, rplLoaderContext->regionMappingBase_text.GetMPTR() + regionTextSize + 0x1000);
 	PPCRecompiler_allocateRange(rplLoaderContext->regionMappingBase_text.GetMPTR(), regionTextSize + 0x1000);
 
@@ -1478,9 +1494,11 @@ void RPLLoader_InitState()
 	cemu_assert_debug(!rplLoaderHeap_workarea.hasAllocations());
 	rplLoaderHeap_lowerAreaCodeMem2.setHeapBase(memory_getPointerFromVirtualOffset(MEMORY_CODE_TRAMPOLINE_AREA_ADDR));
 	rplLoaderHeap_codeArea2.setHeapBase(memory_getPointerFromVirtualOffset(MEMORY_CODEAREA_ADDR));
+
 	rplLoaderHeap_workarea.setHeapBase(memory_getPointerFromVirtualOffset(MEMORY_RPLLOADER_AREA_ADDR));
 	g_heapTrampolineArea.setBaseAllocator(&rplLoaderHeap_lowerAreaCodeMem2);
     RPLLoader_UnloadAll();
+
 }
 
 void RPLLoader_BeginCemuhookCRC(RPLModule* rpl)
@@ -1785,6 +1803,18 @@ void RPLLoader_LinkSingleModule(RPLModule* rplLoaderContext, bool resolveOnlyExp
 	else
 		RPLLoader_HandleRelocs(rplLoaderContext, sharedImportTracking, 0);
 
+	// Model the occupied words observed in the retail loader's text tail.
+	// Only the captured first words are known, so leave the rest untouched.
+	if (!resolveOnlyExports && std::getenv("CEMU_CAKE_TEST_LAYOUT") &&
+	    rplLoaderContext->moduleName == "turbo" &&
+	    rplLoaderContext->regionSize_text >= 0xb03604)
+	{
+		const uint32 text = rplLoaderContext->regionMappingBase_text.GetMPTR();
+		memory_writeU32(text + 0xb03000, 0x3d600103);
+		memory_writeU32(text + 0xb03400, 0x3d600102);
+		memory_writeU32(text + 0xb03600, 0x3d600103);
+	}
+
 	RPLLoader_FlushMemory(rplLoaderContext);
 }
 
@@ -1877,7 +1907,9 @@ void RPLLoader_UnloadModule(RPLDependency* rplDependency, bool skipPPCCalls)
 		}
 	}
 	// release memory
-	rplLoaderHeap_codeArea2.free(rpl->regionMappingBase_text.GetPtr());
+	auto& textHeap = UsesCakeTestTextHeap(rpl->moduleName)
+		? s_cakeTestHeap : rplLoaderHeap_codeArea2;
+	textHeap.free(rpl->regionMappingBase_text.GetPtr());
 	rpl->regionMappingBase_text = nullptr;
 
 	// for some reason freeing the data allocations causes a crash in MP10 on boot
@@ -2017,6 +2049,10 @@ void RPLLoader_AddDependency(std::string_view name, bool isMainExecutable)
 	RPLDependency* newDependency = new RPLDependency();
 	newDependency->isMainExecutable = isMainExecutable;
 	newDependency->moduleName = moduleName;
+	if (LaunchSettings::AromaEnabled() && name.starts_with("~/") &&
+	    name.ends_with(".rpl") && name.find("..") == std::string_view::npos &&
+	    name.find('\\') == std::string_view::npos && !name.substr(2).starts_with('/'))
+		newDependency->aromaSDPath = name.substr(2);
 	newDependency->referenceCount = 1;
 	newDependency->coreinitHandle = rplLoader_currentHandleCounter;
 	newDependency->tlsModuleIndex = rplLoader_currentTlsModuleIndex;
@@ -2203,6 +2239,14 @@ void RPLLoader_LoadDependency(RPLDependency* dependency)
 	// attempt to load RPLs from Cemu's /cafeLibs/ directory first
 	std::string rplFilename = dependency->moduleName;
 	rplFilename.append(dependency->isMainExecutable ? ".rpx" : ".rpl");
+	if (!dependency->aromaSDPath.empty())
+	{
+		const auto path = ActiveSettings::GetUserDataPath("sdcard/{}", dependency->aromaSDPath);
+		auto fileData = FileStream::LoadIntoMemory(path);
+		if (fileData)
+			dependency->rplLoaderContext = RPLLoader_LoadFromMemory(fileData->data(), fileData->size(), rplFilename);
+		return;
+	}
 	if (ActiveSettings::LoadSharedLibrariesEnabled() && !dependency->isMainExecutable)
 	{
 		const auto cafeLibsFilePath = ActiveSettings::GetUserDataPath("cafeLibs/{}", rplFilename);
@@ -2529,17 +2573,21 @@ private:
 	std::vector<allocEntry_t> list_allocatedEntries;
 };
 
-SimpleHeap<uint32, uint32> heapCodeCaveArea(MEMORY_CODECAVEAREA_ADDR, MEMORY_CODECAVEAREA_SIZE);
+static auto& GetCodeCaveHeap()
+{
+	static SimpleHeap<uint32, uint32> heap(mmuRange_CODECAVE.getBase(), mmuRange_CODECAVE.getSize());
+	return heap;
+}
 
 MEMPTR<void> RPLLoader_AllocateCodeCaveMem(uint32 alignment, uint32 size)
 {
-	uint32 addr = heapCodeCaveArea.alloc(size, std::max(alignment, 256u));
+	uint32 addr = GetCodeCaveHeap().alloc(size, std::max(alignment, 256u));
 	return MEMPTR<void>{addr};
 }
 
 void RPLLoader_ReleaseCodeCaveMem(MEMPTR<void> addr)
 {
-	heapCodeCaveArea.free(addr.GetMPTR());
+	GetCodeCaveHeap().free(addr.GetMPTR());
 }
 
 void RPLLoader_UnloadAll()
@@ -2570,6 +2618,8 @@ void RPLLoader_UnloadAll()
 	rplSymbolStorage_unloadAll();
 	// free all code imports
 	g_heapTrampolineArea.releaseAll();
+
+
 	list_mappedFunctionImports.clear();
 	g_map_callableExports.clear();
 	rplLoader_applicationHasMemoryControl = false;

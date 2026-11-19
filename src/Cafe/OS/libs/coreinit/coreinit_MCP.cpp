@@ -1,6 +1,7 @@
 #include "Cafe/OS/common/OSCommon.h"
 #include "Cafe/IOSU/legacy/iosu_ioctl.h"
 #include "Cafe/IOSU/legacy/iosu_mcp.h"
+#include "Cafe/IOSU/legacy/iosu_crypto.h"
 #include "Cafe/OS/libs/coreinit/coreinit_IOS.h"
 #include "Cafe/OS/libs/coreinit/coreinit_MCP.h"
 
@@ -65,7 +66,13 @@ sint32 MCP_GetSysProdSettings(MCPHANDLE mcpHandle, SysProdSettings* sysProdSetti
 	sysProdSettings->gameRegion = (uint8)CafeSystem::GetForegroundTitleRegion();
 	sysProdSettings->platformRegion = (uint8)CafeSystem::GetPlatformRegion();
 
-	// contains Wii U serial parts at +0x1A and +0x22?
+	// MCPSysProdSettings code_id/serial_id back Homebrew on Menu's save key.
+	// Read the user's existing EEPROM dump; never log the identifying values.
+	auto* bytes = reinterpret_cast<uint8*>(sysProdSettings);
+	iosuCrypto_readSeepromBytes(bytes + 0x1a, 0xac, 8);
+	iosuCrypto_readSeepromBytes(bytes + 0x22, 0xb0, 12);
+	bytes[0x21] = 0;
+	bytes[0x2d] = 0;
 	return 0;
 }
 

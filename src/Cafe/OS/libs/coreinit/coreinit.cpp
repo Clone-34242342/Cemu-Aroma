@@ -372,6 +372,7 @@ namespace coreinit
 
 		void RPLUnmapped() override
 		{
+			coreinit::ResetIM();
 			ResetAsyncCallback();
 			ResetFS();
 			coreinit::ShutdownCodeGen();

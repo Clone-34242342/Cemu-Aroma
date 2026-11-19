@@ -118,6 +118,7 @@ namespace coreinit
 		cafeExportRegister("coreinit", __OSLockScheduler, LogType::Placeholder);
 		cafeExportRegister("coreinit", __OSUnlockScheduler, LogType::Placeholder);
 
+		cafeExportRegister("coreinit", OSIsInterruptEnabled, LogType::CoreinitThread);
 		cafeExportRegister("coreinit", OSDisableInterrupts, LogType::CoreinitThread);
 		cafeExportRegister("coreinit", OSEnableInterrupts, LogType::CoreinitThread);
 		cafeExportRegister("coreinit", OSRestoreInterrupts, LogType::CoreinitThread);
